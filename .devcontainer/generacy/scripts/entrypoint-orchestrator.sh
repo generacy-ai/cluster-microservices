@@ -34,6 +34,7 @@ install_packages() {
         "@generacy-ai/generacy@${CHANNEL}" \
         "@generacy-ai/agency@${CHANNEL}" \
         "@generacy-ai/agency-plugin-spec-kit@${CHANNEL}" \
+        "@generacy-ai/cluster-relay@${CHANNEL}" \
         2>>"$SETUP_LOG" || { log "ERROR: npm install failed"; exit 1; }
     # Write marker: channel + installed version of generacy
     local version
@@ -45,14 +46,6 @@ install_packages() {
 SETUP_LOG="${SETUP_LOG:-/tmp/generacy-setup.log}"
 if [ "${SKIP_PACKAGE_UPDATE:-false}" = "true" ]; then
     log "SKIP_PACKAGE_UPDATE=true — skipping npm install"
-elif [ -f "${MARKER_FILE}" ]; then
-    MARKER=$(cat "${MARKER_FILE}")
-    if [ "${MARKER%:*}" = "${CHANNEL}" ]; then
-        log "Packages already installed for channel '${CHANNEL}' (${MARKER#*:}) — skipping"
-    else
-        log "Channel changed from '${MARKER%:*}' to '${CHANNEL}' — reinstalling"
-        install_packages
-    fi
 else
     install_packages
 fi
