@@ -76,6 +76,8 @@ services:
     user: node
     privileged: true
     restart: unless-stopped
+    tmpfs:
+      - /run/generacy-credhelper:mode=1750,uid=1002,gid=1000
     stop_grace_period: 30s
     deploy:
       replicas: ${WORKER_COUNT:-3}

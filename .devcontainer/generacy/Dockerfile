@@ -64,6 +64,13 @@ RUN mkdir -p /workspaces && chown -R node:node /workspaces
 # (Docker named volumes default to root, causing EACCES for node user)
 RUN mkdir -p /shared-packages && chown node:node /shared-packages
 
+# Credentials architecture: workflow subprocess isolation
+# See tetrad-development docs/credentials-architecture-plan.md decision #4
+# generacy-workflow (uid 1001): agent processes run as this user during workflows
+# credhelper (uid 1002): in-worker credhelper daemon runs as this user
+RUN useradd --uid 1001 --gid node --no-create-home --shell /bin/bash generacy-workflow \
+ && useradd --uid 1002 --gid node --no-create-home --shell /usr/sbin/nologin credhelper
+
 # +============================================================================+
 # |  Customize below: add your project's system dependencies                    |
 # |                                                                             |
