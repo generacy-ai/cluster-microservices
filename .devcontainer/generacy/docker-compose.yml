@@ -77,7 +77,10 @@ services:
     privileged: true
     restart: unless-stopped
     tmpfs:
+      # credhelper control socket lives here, owned by the credhelper uid
       - /run/generacy-credhelper:mode=1750,uid=1002,gid=1000
+      # in-cluster control-plane HTTP service socket, owned by the node uid
+      - /run/generacy-control-plane:mode=1750,uid=1000,gid=1000
     stop_grace_period: 30s
     deploy:
       replicas: ${WORKER_COUNT:-3}
@@ -87,6 +90,11 @@ services:
       - ~/.claude.json:/home/node/.claude.json
       # Shared packages volume (read-only: workers consume packages installed by orchestrator)
       - shared-packages:/shared-packages:ro
+      # Credentials state dir: holds the cluster-local sealed store and master.key.
+      # Mode 0700 owned by uid 1000 (node) — set in the image and inherited by
+      # the named volume on first-init. The credhelper uid (1002) writes
+      # master.key inside as 0600 owned by 1002.
+      - generacy-data:/var/lib/generacy
     env_file:
       - path: .env
       - path: .env.local
@@ -144,6 +152,8 @@ volumes:
   shared-packages:
   # npm cache: speeds up repeated package installs on orchestrator restart
   npm-cache:
+  # Credentials state: cluster-local sealed credential store and master.key
+  generacy-data:
 
 networks:
   # Isolated cluster network
