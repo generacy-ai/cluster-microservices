@@ -2,6 +2,8 @@
 
 Development cluster setup for AI-powered workflow development with [Generacy](https://github.com/generacy-ai/generacy). Provides an orchestrator, scalable Claude Code workers, Redis, and isolated networking.
 
+> **v1.5 credentials infrastructure.** This image bakes in the uid layout and runtime mounts required by the v1.5 credentials architecture (`generacy-workflow` uid 1001 and `credhelper` uid 1002 alongside `node` uid 1000, tmpfs at `/run/generacy-credhelper` and `/run/generacy-control-plane`, and a `generacy-data` named volume at `/var/lib/generacy`). The credhelper binary, plugins, and bootstrap UI ship in a follow-up image build.
+
 ## Getting Started
 
 ### Option A: New Project (Fork)

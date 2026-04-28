@@ -64,12 +64,34 @@ RUN mkdir -p /workspaces && chown -R node:node /workspaces
 # (Docker named volumes default to root, causing EACCES for node user)
 RUN mkdir -p /shared-packages && chown node:node /shared-packages
 
-# Credentials architecture: workflow subprocess isolation
-# See tetrad-development docs/credentials-architecture-plan.md decision #4
-# generacy-workflow (uid 1001): agent processes run as this user during workflows
-# credhelper (uid 1002): in-worker credhelper daemon runs as this user
+# Credentials architecture: workflow subprocess isolation (v1.5)
+# See tetrad-development docs/credentials-architecture-plan.md decision #4.
+# These uids exist specifically to enforce uid-boundary isolation between the
+# orchestrator/node user, the agent workflow process, and the credhelper daemon
+# inside a single worker container. Do NOT consolidate them away — the
+# isolation model relies on three distinct uids inside the same container.
+# DinD note: only the `node` uid (1000) is in the `docker` group. The workflow
+# uid (1001) and credhelper uid (1002) deliberately do NOT have docker access —
+# the workflow uid will reach the in-container DinD daemon only through the
+# scoped docker-socket-proxy that lands in phase 9 (architecture decision #13).
+#   generacy-workflow (uid 1001): agent processes run as this user during workflows
+#   credhelper        (uid 1002): in-worker credhelper daemon runs as this user
 RUN useradd --uid 1001 --gid node --no-create-home --shell /bin/bash generacy-workflow \
  && useradd --uid 1002 --gid node --no-create-home --shell /usr/sbin/nologin credhelper
+
+# Credhelper binary + plugins drop here in a future image build.
+# Root-owned, world-readable (0755) so the credhelper uid can read/exec, but
+# only root can modify the contents at runtime.
+RUN mkdir -p /usr/local/lib/generacy-credhelper \
+ && chown root:root /usr/local/lib/generacy-credhelper \
+ && chmod 0755 /usr/local/lib/generacy-credhelper
+
+# Pre-create the credentials state dir so the named-volume mount inherits
+# ownership/mode on first-init. Owned by uid 1000 (node), mode 0700 — see
+# .devcontainer/generacy/docker-compose.yml worker service.
+RUN mkdir -p /var/lib/generacy \
+ && chown node:node /var/lib/generacy \
+ && chmod 0700 /var/lib/generacy
 
 # +============================================================================+
 # |  Customize below: add your project's system dependencies                    |

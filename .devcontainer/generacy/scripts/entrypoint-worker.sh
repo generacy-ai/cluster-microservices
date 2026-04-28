@@ -8,6 +8,21 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [worker:${AGENT_ID}] $*"
 }
 
+# Credentials architecture (v1.5): block cross-process ptrace before any
+# secret-handling subprocess starts. Yama is a host-global LSM parameter so
+# this is a no-op when the host already has it set (recommended for shared
+# hosts). Soft-fails on unprivileged containers — the entrypoint warns but
+# continues so non-credentialed workflows still run.
+echo 1 > /proc/sys/kernel/yama/ptrace_scope 2>/dev/null \
+    || echo "[warn] Could not set ptrace_scope=1 (requires privileged mode or host-level sysctl)"
+
+# Credentials state dir: 0700 owned by node (uid 1000). Pre-created in the
+# image so the named volume inherits perms on first-init; this block is the
+# idempotent runtime guard for re-runs and pre-existing volumes.
+if [ -d /var/lib/generacy ]; then
+    chmod 0700 /var/lib/generacy 2>/dev/null || true
+fi
+
 log "Starting worker setup..."
 
 # Start Docker-in-Docker daemon (workers get DinD but not host context)
