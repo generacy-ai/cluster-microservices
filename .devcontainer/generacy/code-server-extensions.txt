@@ -1,0 +1,17 @@
+# Pre-installed code-server extensions, baked into the cluster-base image.
+# One extension id per line. Comments and blank lines are ignored.
+#
+# These reduce first-run overhead on "Open IDE" — every fresh code-server
+# launch starts with these already available.
+#
+# Source registry: code-server defaults to the Open VSX gallery
+# (https://open-vsx.org). Anything pinned here must be available there;
+# Microsoft-marketplace-only extensions cannot be pre-installed this way.
+#
+# TypeScript language support is bundled with code-server itself, so no
+# separate extension is needed for it.
+
+dbaeumer.vscode-eslint
+eamodio.gitlens
+yzhang.markdown-all-in-one
+christian-kohler.path-intellisense
