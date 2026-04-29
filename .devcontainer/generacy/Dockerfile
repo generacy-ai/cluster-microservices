@@ -33,6 +33,28 @@ USER root
 # Add Claude to system-wide PATH
 ENV PATH="/home/node/.local/bin:${PATH}"
 
+# Install code-server (pinned). Standalone install prefix puts the binary at
+# /usr/local/bin/code-server, which the in-cluster control-plane lifecycle
+# endpoint expects (CODE_SERVER_BIN default).
+ARG CODE_SERVER_VERSION=4.96.4
+ENV CODE_SERVER_VERSION=${CODE_SERVER_VERSION}
+RUN curl -fsSL https://code-server.dev/install.sh \
+        | sh -s -- --method standalone --prefix /usr/local --version "${CODE_SERVER_VERSION}" \
+ && code-server --version
+
+# Pre-install the curated extension set so first IDE launch is fast.
+# The list lives in a controlled file and is read line-by-line; install runs
+# as the node user since extensions are scoped to that user's data dir.
+COPY code-server-extensions.txt /usr/local/share/code-server-extensions.txt
+USER node
+RUN set -eu; \
+    grep -vE '^\s*(#|$)' /usr/local/share/code-server-extensions.txt \
+        | while IFS= read -r ext; do \
+            [ -z "$ext" ] && continue; \
+            code-server --install-extension "$ext" --force; \
+          done
+USER root
+
 # -- Stage 3: Docker-in-Docker (CLI + daemon + compose) -----------------------
 FROM tooling AS dind
 

@@ -17,10 +17,13 @@ The image is built and published by [.github/workflows/publish-cluster-image.yml
 - GitHub Actions cache (`type=gha`) speeds up reruns.
 - Stamps OCI labels: `org.opencontainers.image.source`, `.description`, `.licenses`, `.revision`, `.version`.
 
-**Smoke test:** A separate `smoke-test` job pulls the freshly published image and runs two checks:
+**Smoke test:** A separate `smoke-test` job pulls the freshly published image and runs:
 
 1. **Credhelper uid** — `docker run --rm <image> id credhelper` and asserts `uid=1002`. Guards the v1.5 phase-2 isolation uids (see [Dockerfile](.devcontainer/generacy/Dockerfile) — `generacy-workflow` uid 1001 and `credhelper` uid 1002).
 2. **DinD startup** — `docker run --privileged --rm -e ENABLE_DIND=true <image> bash -lc "/usr/local/bin/setup-docker-dind.sh && docker info"`. Confirms the in-container Docker daemon starts and answers, which is the variant's whole reason for existing.
+3. **code-server presence** — `code-server --version` runs from `/usr/local/bin/code-server`.
+4. **Pre-installed extensions** — `code-server --list-extensions` includes the curated set baked in via [.devcontainer/generacy/code-server-extensions.txt](.devcontainer/generacy/code-server-extensions.txt).
+5. **code-server boot/stop** — code-server starts bound to a Unix socket, accepts an HTTP request, and exits cleanly on SIGTERM. This is the same end-to-end shape the in-cluster control-plane lifecycle endpoint produces.
 
 ## Tag scheme
 
