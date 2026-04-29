@@ -1,4 +1,4 @@
-name: Publish cluster-base image
+name: Publish cluster-microservices image
 
 on:
   push:
@@ -17,7 +17,7 @@ permissions:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: generacy-ai/cluster-base
+  IMAGE_NAME: generacy-ai/cluster-microservices
 
 jobs:
   build:
@@ -65,7 +65,7 @@ jobs:
             ${{ github.event_name == 'push' && format('{0}/{1}:latest', env.REGISTRY, env.IMAGE_NAME) || '' }}
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.description=Generacy cluster-base development image — orchestrator + workers, Claude Code, no extra services.
+            org.opencontainers.image.description=Generacy cluster-microservices development image — orchestrator + workers + Docker-in-Docker for app stacks.
             org.opencontainers.image.licenses=MIT
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ steps.ver.outputs.version }}
@@ -92,3 +92,13 @@ jobs:
           OUTPUT=$(docker run --rm "${IMAGE}" id credhelper)
           echo "${OUTPUT}"
           echo "${OUTPUT}" | grep -Eq '\buid=1002\b'
+
+      - name: Verify DinD startup
+        run: |
+          set -euo pipefail
+          IMAGE="${{ needs.build.outputs.image }}"
+          echo "DinD smoke-test ${IMAGE}"
+          docker run --privileged --rm \
+            -e ENABLE_DIND=true \
+            "${IMAGE}" \
+            bash -lc "/usr/local/bin/setup-docker-dind.sh && docker info"
