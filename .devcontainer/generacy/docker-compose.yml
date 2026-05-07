@@ -15,9 +15,13 @@ services:
   # Orchestrator: manages workers and dispatches workflows
   # This is the container VS Code connects to via dev containers
   orchestrator:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    # Default: pull the pre-built image from the registry.
+    # Power users: comment the line below and uncomment the build: block to
+    # build locally from this repo's Dockerfile (e.g. when customizing it).
+    image: ghcr.io/generacy-ai/cluster-microservices:preview
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
     command: /usr/local/bin/entrypoint-orchestrator.sh
     user: node
     privileged: true
@@ -69,9 +73,14 @@ services:
   # Workers: headless Claude Code agents
   # Scale with WORKER_COUNT env var (default: 3)
   worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    # Default: pull the pre-built image from the registry (same image as the
+    # orchestrator — entrypoint differentiates the two roles).
+    # Power users: comment the line below and uncomment the build: block to
+    # build locally from this repo's Dockerfile.
+    image: ghcr.io/generacy-ai/cluster-microservices:preview
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
     command: /usr/local/bin/entrypoint-worker.sh
     user: node
     privileged: true
