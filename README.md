@@ -4,72 +4,30 @@ Generacy cluster image with Docker-in-Docker for app stacks: orchestrator + work
 
 `cluster-microservices` is one of the cluster image variants consumed by `npx generacy launch`, and is the variant to pick when projects need to spin up their own service containers (databases, queues, sidecar apps). It tracks `cluster-base` upstream — the credentials/uid isolation model and entrypoints are inherited; only the DinD layer is added on top. Architecture context: see [tetrad-development/docs/dev-cluster-architecture.md](https://github.com/generacy-ai/tetrad-development/blob/develop/docs/dev-cluster-architecture.md) — "Cluster image variants".
 
+## Default vs. local build
+
+The default [.devcontainer/generacy/docker-compose.yml](.devcontainer/generacy/docker-compose.yml) pulls the pre-built image from the registry. The `Dockerfile` is kept in the repo for the power-user path: comment the `image:` line and uncomment the `build:` block to build locally (e.g. when customizing the image).
+
 ## Publishing
 
-The image is built and published by [.github/workflows/publish-cluster-image.yml](.github/workflows/publish-cluster-image.yml).
+This repo no longer publishes its own image. The build/publish workflow lives in [generacy-ai/generacy](https://github.com/generacy-ai/generacy) — it checks out cluster-microservices at the requested channel, builds the image, and pushes channel-aware tags.
 
-**Triggers:**
-- **Tag push matching `v*`** — releases. Builds, publishes `:<tag>` and `:latest`, then runs the smoke-test job.
-- **`workflow_dispatch`** — manual test publish from the Actions tab. Tags only `:<tag-input>` (does not move `:latest`).
+The publish workflow was moved out of this repo so that derived project repos created from cluster-microservices do not inherit a `.github/workflows/` path. GitHub Apps require a separate `Workflows: write` permission to create trees containing workflow files; copying cluster-microservices into a user-owned repo via the GitHub App was failing on `git/trees` because of that permission gap.
 
-**Build:**
-- Uses Docker Buildx for multi-arch: `linux/amd64` and `linux/arm64`.
-- GitHub Actions cache (`type=gha`) speeds up reruns.
-- Stamps OCI labels: `org.opencontainers.image.source`, `.description`, `.licenses`, `.revision`, `.version`.
+## Channel and tag scheme
 
-**Smoke test:** A separate `smoke-test` job pulls the freshly published image and runs:
+| Channel   | Branch    | Image tag                                                  |
+| --------- | --------- | ---------------------------------------------------------- |
+| `stable`  | `main`    | `ghcr.io/generacy-ai/cluster-microservices:stable`         |
+| `preview` | `develop` | `ghcr.io/generacy-ai/cluster-microservices:preview`        |
 
-1. **Credhelper uid** — `docker run --rm <image> id credhelper` and asserts `uid=1002`. Guards the v1.5 phase-2 isolation uids (see [Dockerfile](.devcontainer/generacy/Dockerfile) — `generacy-workflow` uid 1001 and `credhelper` uid 1002).
-2. **DinD startup** — `docker run --privileged --rm -e ENABLE_DIND=true <image> bash -lc "/usr/local/bin/setup-docker-dind.sh && docker info"`. Confirms the in-container Docker daemon starts and answers, which is the variant's whole reason for existing.
-3. **code-server presence** — `code-server --version` runs from `/usr/local/bin/code-server`.
-4. **Pre-installed extensions** — `code-server --list-extensions` includes the curated set baked in via [.devcontainer/generacy/code-server-extensions.txt](.devcontainer/generacy/code-server-extensions.txt).
-5. **code-server boot/stop** — code-server starts bound to a Unix socket, accepts an HTTP request, and exits cleanly on SIGTERM. This is the same end-to-end shape the in-cluster control-plane lifecycle endpoint produces.
+The orchestrator and worker honor `GENERACY_CHANNEL` (default: `stable`). The `CHANNEL_BRANCH_MAP` in worker config is `stable→main, preview→develop`.
 
-## Tag scheme
+## Verifying a public pull
 
-| Tag                                                       | When applied             | Floats? |
-| --------------------------------------------------------- | ------------------------ | ------- |
-| `ghcr.io/generacy-ai/cluster-microservices:vX.Y.Z`        | Tag push `vX.Y.Z`        | No      |
-| `ghcr.io/generacy-ai/cluster-microservices:latest`        | Tag push (any `v*`)      | Yes     |
-| `ghcr.io/generacy-ai/cluster-microservices:<dispatch-tag>`| `workflow_dispatch` only | No      |
-
-Consumers (the `generacy` CLI) pull a pinned semver tag for releases; `latest` is provided for ad-hoc local pulls and is not the recommended production target.
-
-## Cutting a release
-
-1. Merge release-ready changes to `develop` (or your release branch).
-2. Tag and push:
-
-   ```bash
-   git tag v1.5.0
-   git push origin v1.5.0
-   ```
-
-3. Watch the workflow at <https://github.com/generacy-ai/cluster-microservices/actions/workflows/publish-cluster-image.yml>.
-4. After it succeeds, verify a public pull works (see below).
-
-## Making the package public (one-time, after first publish)
-
-GHCR packages default to **private**, even when published from a public repo. After the first successful publish, an org admin must mark the package public so unauthenticated `docker pull` works:
-
-1. Go to <https://github.com/orgs/generacy-ai/packages/container/cluster-microservices/settings>.
-2. Scroll to **Danger Zone → Change package visibility**.
-3. Select **Public** and confirm.
-4. Optional but recommended: under **Manage Actions access**, ensure the `cluster-microservices` repo has `Write` so this workflow can keep publishing.
-
-Verify from any unauthenticated machine:
+After the package is marked public (one-time per package, by an org admin at <https://github.com/orgs/generacy-ai/packages/container/cluster-microservices/settings>), unauthenticated pulls work:
 
 ```bash
 docker logout ghcr.io
-docker pull ghcr.io/generacy-ai/cluster-microservices:latest
+docker pull ghcr.io/generacy-ai/cluster-microservices:stable
 ```
-
-This step is only needed once per package name. Subsequent tags inherit the public visibility.
-
-## Manual test publish
-
-Use this when validating workflow changes without cutting a real release:
-
-1. Open the **Actions** tab → **Publish cluster-microservices image** → **Run workflow**.
-2. Pick a branch and supply a tag (e.g. `dev-pr42`).
-3. The workflow publishes `ghcr.io/generacy-ai/cluster-microservices:dev-pr42` and runs the smoke tests. `:latest` is **not** moved.
