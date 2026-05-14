@@ -60,8 +60,12 @@ fi
 
 log "CLI wrappers created in ${LOCAL_BIN}"
 
-# Run generacy setup if CLI is available
-if command -v generacy >/dev/null 2>&1; then
+# Run generacy setup if CLI is available.
+# In wizard mode the workspace isn't cloned yet (credentials arrive post-activation),
+# so workspace/build steps are deferred to entrypoint-post-activation.sh.
+if [ "${GENERACY_BOOTSTRAP_MODE:-devcontainer}" = "wizard" ]; then
+    log "Wizard mode — skipping pre-activation generacy setup; will run after activation"
+elif command -v generacy >/dev/null 2>&1; then
     SETUP_LOG="/tmp/generacy-setup.log"
     log "Running generacy setup..."
 
@@ -84,8 +88,10 @@ if command -v generacy >/dev/null 2>&1; then
     }
 fi
 
-# Pre-flight: verify speckit readiness
-if [ -x "/usr/local/bin/setup-speckit.sh" ]; then
+# Pre-flight: verify speckit readiness.
+# Skip in wizard mode — speckit lives in the not-yet-cloned workspace; the worker
+# will idle until post-activation completes setup and a restart picks it up.
+if [ "${GENERACY_BOOTSTRAP_MODE:-devcontainer}" != "wizard" ] && [ -x "/usr/local/bin/setup-speckit.sh" ]; then
     if ! bash /usr/local/bin/setup-speckit.sh --verify; then
         log "FATAL: Speckit commands not available. Worker cannot process phases."
         log "FATAL: Check ${SETUP_LOG:-/tmp/generacy-setup.log} for setup errors."

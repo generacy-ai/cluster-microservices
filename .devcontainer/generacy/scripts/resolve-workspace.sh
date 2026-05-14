@@ -47,11 +47,16 @@ fi
 
 # Standalone mode: clone or pull
 if [ -n "${REPO_URL:-}" ] && [ ! -d "${WORKSPACE_DIR}/.git" ]; then
-    log "Cloning project repo: ${REPO_URL} (branch: ${REPO_BRANCH:-main})"
-    git clone --branch "${REPO_BRANCH:-main}" "${REPO_URL}" "${WORKSPACE_DIR}"
+    if [ "${GENERACY_BOOTSTRAP_MODE:-devcontainer}" = "wizard" ]; then
+        log "Wizard mode — deferring repo clone until activation completes (credentials arrive post-wizard)"
+        mkdir -p "${WORKSPACE_DIR}"
+    else
+        log "Cloning project repo: ${REPO_URL} (branch: ${REPO_BRANCH:-main})"
+        git clone --branch "${REPO_BRANCH:-main}" "${REPO_URL}" "${WORKSPACE_DIR}"
+    fi
 elif [ -d "${WORKSPACE_DIR}/.git" ]; then
     log "Project repo already cloned, pulling latest..."
     cd "${WORKSPACE_DIR}"
-    git fetch origin
+    git fetch origin 2>/dev/null || true
     git pull --ff-only origin "${REPO_BRANCH:-main}" 2>/dev/null || true
 fi
