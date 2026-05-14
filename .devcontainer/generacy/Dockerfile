@@ -42,6 +42,23 @@ RUN curl -fsSL https://code-server.dev/install.sh \
         | sh -s -- --method standalone --prefix /usr/local --version "${CODE_SERVER_VERSION}" \
  && code-server --version
 
+# Install Microsoft VS Code CLI (`code`) — distinct from code-server above.
+# Needed by control-plane's vscode-tunnel-start lifecycle action to register
+# a VS Code Tunnel for the cluster (so VS Code Desktop deep-links land in
+# the container, not the user's host machine). Pin the version — stdout-format
+# drift from Microsoft would break the device-code regex parsing.
+ARG VSCODE_CLI_VERSION=1.95.3
+RUN ARCH="$(dpkg --print-architecture)" \
+    && case "$ARCH" in \
+         amd64) VSCODE_ARCH=cli-linux-x64 ;; \
+         arm64) VSCODE_ARCH=cli-linux-arm64 ;; \
+         *) echo "Unsupported arch: $ARCH" && exit 1 ;; \
+       esac \
+    && curl -fsSL "https://update.code.visualstudio.com/${VSCODE_CLI_VERSION}/${VSCODE_ARCH}/stable" -o /tmp/code.tar.gz \
+    && tar -xzf /tmp/code.tar.gz -C /usr/local/bin code \
+    && rm /tmp/code.tar.gz \
+    && code --version
+
 # Pre-install the curated extension set so first IDE launch is fast.
 # The list lives in a controlled file and is read line-by-line; install runs
 # as the node user since extensions are scoped to that user's data dir.
@@ -114,6 +131,15 @@ RUN mkdir -p /usr/local/lib/generacy-credhelper \
 RUN mkdir -p /var/lib/generacy \
  && chown node:node /var/lib/generacy \
  && chmod 0700 /var/lib/generacy
+
+# Pre-create the VS Code CLI state dir so the named-volume mount inherits node
+# ownership on first-init. `code` 1.95.3 writes tunnel auth state (token.json,
+# tunnel-stable.lock) to /home/node/.vscode/cli/. Without this pre-create,
+# Docker would create the mount point as root-owned and `code` (running as
+# node) couldn't write to it. See .devcontainer/generacy/docker-compose.yml
+# orchestrator service.
+RUN mkdir -p /home/node/.vscode/cli \
+ && chown -R node:node /home/node/.vscode
 
 # +============================================================================+
 # |  Customize below: add your project's system dependencies                    |
