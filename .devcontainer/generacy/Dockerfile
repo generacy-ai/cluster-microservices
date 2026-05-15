@@ -132,6 +132,18 @@ RUN mkdir -p /var/lib/generacy \
  && chown node:node /var/lib/generacy \
  && chmod 0700 /var/lib/generacy
 
+# Pre-create the app-config state dir so the named-volume mount inherits
+# ownership/mode on first-init. Owned by uid 1000 (node), mode 0750. Holds
+# the materialized non-secret env file and metadata YAML written by the
+# control-plane daemon (which runs as the node uid in the orchestrator
+# container). Without this pre-create, the daemon crashes on init with
+# EACCES because /var/lib is root-owned and the node uid can't create the
+# subdirectory itself. See .devcontainer/generacy/docker-compose.yml
+# orchestrator service.
+RUN mkdir -p /var/lib/generacy-app-config \
+ && chown node:node /var/lib/generacy-app-config \
+ && chmod 0750 /var/lib/generacy-app-config
+
 # Pre-create the VS Code CLI state dir so the named-volume mount inherits node
 # ownership on first-init. `code` 1.95.3 writes tunnel auth state (token.json,
 # tunnel-stable.lock) to /home/node/.vscode/cli/. Without this pre-create,

@@ -49,6 +49,14 @@ services:
       # Path is /home/node/.vscode/cli (where `code` 1.95.3 actually persists
       # token.json and tunnel-stable.lock), NOT /home/node/.vscode-cli.
       - vscode-cli-state:/home/node/.vscode/cli
+      # App-config state dir: holds the control-plane daemon's materialized
+      # non-secret env file (/var/lib/generacy-app-config/env) and metadata
+      # YAML (values.yaml). Mode 0750 owned by node:node — set in the image
+      # and inherited by the named volume on first-init. Persists across
+      # `docker compose down && up` so app-config values entered via the
+      # bootstrap wizard / Settings panel don't have to be re-entered on
+      # cluster restart.
+      - generacy-app-config-data:/var/lib/generacy-app-config
     env_file:
       - path: .env
       - path: .env.local
@@ -175,6 +183,8 @@ volumes:
   npm-cache:
   # Credentials state: cluster-local sealed credential store and master.key
   generacy-data:
+  # App-config state: control-plane daemon's materialized env file and metadata YAML
+  generacy-app-config-data:
   # VS Code CLI auth state for the orchestrator's `code tunnel` daemon.
   # Renamed from `vscode-cli` (which mounted at the wrong path) so Docker
   # provisions a fresh volume at the correct location. Existing clusters will
