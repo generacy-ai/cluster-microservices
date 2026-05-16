@@ -26,22 +26,18 @@ if [ -f "$WIZARD_CREDS" ]; then
     set +a
 fi
 
-# Source app-config env vars set via the bootstrap wizard / Settings panel so
-# orchestrator + child processes (control-plane daemon, generacy CLI, spawned
-# workflow runners) inherit user-configured values like LIVEKIT_URL.
-#   - /var/lib/generacy-app-config/env       non-secret, persistent volume
-#   - /run/generacy-app-config/secrets.env   secret, tmpfs, re-rendered at boot
-#     from the encrypted ClusterLocalBackend by the control-plane daemon
-#     (see generacy-ai/generacy#632)
-for app_env in /var/lib/generacy-app-config/env /run/generacy-app-config/secrets.env; do
-    if [ -f "$app_env" ]; then
-        log "Sourcing app-config env from $app_env"
-        set -a
-        # shellcheck disable=SC1090
-        source "$app_env"
-        set +a
-    fi
-done
+# Source non-secret app-config env vars from the persistent volume so that
+# pre-daemon entrypoint steps and the orchestrator process inherit values like
+# LIVEKIT_URL. Secrets are sourced later — see "Source app-config secrets"
+# block after the control-plane socket-wait below.
+NONSECRET_APP_ENV=/var/lib/generacy-app-config/env
+if [ -f "$NONSECRET_APP_ENV" ]; then
+    log "Sourcing app-config env from $NONSECRET_APP_ENV"
+    set -a
+    # shellcheck disable=SC1090
+    source "$NONSECRET_APP_ENV"
+    set +a
+fi
 
 # Configure git credentials
 bash /usr/local/bin/setup-credentials.sh
@@ -174,6 +170,21 @@ if [ -x "${SHARED_PACKAGES}/node_modules/.bin/control-plane" ]; then
     fi
 else
     log "WARNING: control-plane binary not found in ${SHARED_PACKAGES}/node_modules/.bin/ — relay-forwarded /control-plane/* requests will 404"
+fi
+
+# Source app-config secrets — must happen AFTER the control-plane daemon binds
+# its socket because the daemon is what renders /run/generacy-app-config/secrets.env
+# from the encrypted ClusterLocalBackend (see generacy-ai/generacy#632). The
+# tmpfs is empty at container start; if this sourcing ran with the non-secret
+# block earlier in the script the file wouldn't exist yet and the `exec generacy
+# orchestrator` below would launch without secrets in its environment.
+SECRET_APP_ENV=/run/generacy-app-config/secrets.env
+if [ -f "$SECRET_APP_ENV" ]; then
+    log "Sourcing app-config secrets from $SECRET_APP_ENV"
+    set -a
+    # shellcheck disable=SC1090
+    source "$SECRET_APP_ENV"
+    set +a
 fi
 
 # Start orchestrator as PID 1
