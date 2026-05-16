@@ -28,6 +28,25 @@ log "Starting worker setup..."
 # Start Docker-in-Docker daemon (workers get DinD but not host context)
 bash /usr/local/bin/setup-docker-dind.sh
 
+# Source app-config env vars set via the bootstrap wizard / Settings panel so
+# worker + child processes (agent workflows, MCP servers, user services)
+# inherit user-configured values like LIVEKIT_URL, SERVICE_ANTHROPIC_API_KEY.
+#   - /var/lib/generacy-app-config/env       non-secret, RO mount from named
+#     volume the orchestrator's control-plane writes
+#   - /run/generacy-app-config/secrets.env   secret, per-worker tmpfs. Empty
+#     in v1 — propagation from the orchestrator is TBD (see issue #38 Open
+#     question / generacy-ai/generacy#632); guarded by -f so the no-file case
+#     is a silent no-op.
+for app_env in /var/lib/generacy-app-config/env /run/generacy-app-config/secrets.env; do
+    if [ -f "$app_env" ]; then
+        log "Sourcing app-config env from $app_env"
+        set -a
+        # shellcheck disable=SC1090
+        source "$app_env"
+        set +a
+    fi
+done
+
 # Configure git credentials
 bash /usr/local/bin/setup-credentials.sh
 

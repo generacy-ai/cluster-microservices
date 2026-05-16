@@ -43,6 +43,18 @@ if [ -f "$WIZARD_CREDS" ]; then
     set +a
 fi
 
+# Source app-config env vars so the post-activation generacy setup sees
+# user-configured values. Mirrors the same block in entrypoint-orchestrator.sh.
+for app_env in /var/lib/generacy-app-config/env /run/generacy-app-config/secrets.env; do
+    if [ -f "$app_env" ]; then
+        log "Sourcing app-config env from $app_env"
+        set -a
+        # shellcheck disable=SC1090
+        source "$app_env"
+        set +a
+    fi
+done
+
 # Step 1: configure git/gh credentials from the env vars the wizard delivered
 bash /usr/local/bin/setup-credentials.sh
 
