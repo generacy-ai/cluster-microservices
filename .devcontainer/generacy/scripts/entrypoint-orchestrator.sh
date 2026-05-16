@@ -26,6 +26,23 @@ if [ -f "$WIZARD_CREDS" ]; then
     set +a
 fi
 
+# Source app-config env vars set via the bootstrap wizard / Settings panel so
+# orchestrator + child processes (control-plane daemon, generacy CLI, spawned
+# workflow runners) inherit user-configured values like LIVEKIT_URL.
+#   - /var/lib/generacy-app-config/env       non-secret, persistent volume
+#   - /run/generacy-app-config/secrets.env   secret, tmpfs, re-rendered at boot
+#     from the encrypted ClusterLocalBackend by the control-plane daemon
+#     (see generacy-ai/generacy#632)
+for app_env in /var/lib/generacy-app-config/env /run/generacy-app-config/secrets.env; do
+    if [ -f "$app_env" ]; then
+        log "Sourcing app-config env from $app_env"
+        set -a
+        # shellcheck disable=SC1090
+        source "$app_env"
+        set +a
+    fi
+done
+
 # Configure git credentials
 bash /usr/local/bin/setup-credentials.sh
 

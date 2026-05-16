@@ -29,6 +29,11 @@ services:
     tmpfs:
       # in-cluster control-plane HTTP service socket, owned by the node uid
       - /run/generacy-control-plane:mode=1750,uid=1000,gid=1000
+      # Rendered secret app-config env vars (`secrets.env`). Written by the
+      # control-plane daemon on PUT and re-rendered at boot from the encrypted
+      # ClusterLocalBackend — see generacy-ai/generacy#632. Tmpfs because the
+      # plaintext rendering must never hit disk.
+      - /run/generacy-app-config:mode=1750,uid=1000,gid=1000
     stop_grace_period: 30s
     volumes:
       # Clone mode: persistent volume avoids host mount issues (especially on Windows)
@@ -109,6 +114,14 @@ services:
       - /run/generacy-credhelper:mode=1750,uid=1002,gid=1000
       # in-cluster control-plane HTTP service socket, owned by the node uid
       - /run/generacy-control-plane:mode=1750,uid=1000,gid=1000
+      # Rendered secret app-config env vars (`secrets.env`). Mirrors the
+      # orchestrator tmpfs so worker-side processes have the same surface for
+      # sourcing app-config secrets — keeps dev/testing parity between
+      # orchestrator and worker. Propagation of secret content from the
+      # orchestrator's control-plane to per-worker tmpfs is TBD (see issue #38
+      # Open question / generacy-ai/generacy#632); the tmpfs is in place ahead
+      # of that wiring.
+      - /run/generacy-app-config:mode=1750,uid=1000,gid=1000
     stop_grace_period: 30s
     deploy:
       replicas: ${WORKER_COUNT:-3}
@@ -123,6 +136,11 @@ services:
       # the named volume on first-init. The credhelper uid (1002) writes
       # master.key inside as 0600 owned by 1002.
       - generacy-data:/var/lib/generacy
+      # App-config state dir (read-only on workers): orchestrator's control-plane
+      # daemon writes the materialized non-secret env file
+      # (/var/lib/generacy-app-config/env) and metadata YAML; workers consume.
+      # Read-only because only the orchestrator writes.
+      - generacy-app-config-data:/var/lib/generacy-app-config:ro
     env_file:
       - path: .env
       - path: .env.local
