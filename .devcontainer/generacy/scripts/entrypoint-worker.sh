@@ -8,10 +8,44 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [worker:${AGENT_ID}] $*"
 }
 
+# Credentials architecture (v1.5): block cross-process ptrace before any
+# secret-handling subprocess starts. Yama is a host-global LSM parameter so
+# this is a no-op when the host already has it set (recommended for shared
+# hosts). Soft-fails on unprivileged containers — the entrypoint warns but
+# continues so non-credentialed workflows still run.
+echo 1 > /proc/sys/kernel/yama/ptrace_scope 2>/dev/null \
+    || echo "[warn] Could not set ptrace_scope=1 (requires privileged mode or host-level sysctl)"
+
+# Credentials state dir: 0700 owned by node (uid 1000). Pre-created in the
+# image so the named volume inherits perms on first-init; this block is the
+# idempotent runtime guard for re-runs and pre-existing volumes.
+if [ -d /var/lib/generacy ]; then
+    chmod 0700 /var/lib/generacy 2>/dev/null || true
+fi
+
 log "Starting worker setup..."
 
 # Start Docker-in-Docker daemon (workers get DinD but not host context)
 bash /usr/local/bin/setup-docker-dind.sh
+
+# Source app-config env vars set via the bootstrap wizard / Settings panel so
+# worker + child processes (agent workflows, MCP servers, user services)
+# inherit user-configured values like LIVEKIT_URL, SERVICE_ANTHROPIC_API_KEY.
+#   - /var/lib/generacy-app-config/env       non-secret, RO mount from named
+#     volume the orchestrator's control-plane writes
+#   - /run/generacy-app-config/secrets.env   secret, per-worker tmpfs. Empty
+#     in v1 — propagation from the orchestrator is TBD (see issue #38 Open
+#     question / generacy-ai/generacy#632); guarded by -f so the no-file case
+#     is a silent no-op.
+for app_env in /var/lib/generacy-app-config/env /run/generacy-app-config/secrets.env; do
+    if [ -f "$app_env" ]; then
+        log "Sourcing app-config env from $app_env"
+        set -a
+        # shellcheck disable=SC1090
+        source "$app_env"
+        set +a
+    fi
+done
 
 # Configure git credentials
 bash /usr/local/bin/setup-credentials.sh
@@ -45,8 +79,12 @@ fi
 
 log "CLI wrappers created in ${LOCAL_BIN}"
 
-# Run generacy setup if CLI is available
-if command -v generacy >/dev/null 2>&1; then
+# Run generacy setup if CLI is available.
+# In wizard mode the workspace isn't cloned yet (credentials arrive post-activation),
+# so workspace/build steps are deferred to entrypoint-post-activation.sh.
+if [ "${GENERACY_BOOTSTRAP_MODE:-devcontainer}" = "wizard" ]; then
+    log "Wizard mode — skipping pre-activation generacy setup; will run after activation"
+elif command -v generacy >/dev/null 2>&1; then
     SETUP_LOG="/tmp/generacy-setup.log"
     log "Running generacy setup..."
 
@@ -69,8 +107,10 @@ if command -v generacy >/dev/null 2>&1; then
     }
 fi
 
-# Pre-flight: verify speckit readiness
-if [ -x "/usr/local/bin/setup-speckit.sh" ]; then
+# Pre-flight: verify speckit readiness.
+# Skip in wizard mode — speckit lives in the not-yet-cloned workspace; the worker
+# will idle until post-activation completes setup and a restart picks it up.
+if [ "${GENERACY_BOOTSTRAP_MODE:-devcontainer}" != "wizard" ] && [ -x "/usr/local/bin/setup-speckit.sh" ]; then
     if ! bash /usr/local/bin/setup-speckit.sh --verify; then
         log "FATAL: Speckit commands not available. Worker cannot process phases."
         log "FATAL: Check ${SETUP_LOG:-/tmp/generacy-setup.log} for setup errors."

@@ -15,13 +15,25 @@ services:
   # Orchestrator: manages workers and dispatches workflows
   # This is the container VS Code connects to via dev containers
   orchestrator:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    # Default: pull the pre-built image from the registry.
+    # Power users: comment the line below and uncomment the build: block to
+    # build locally from this repo's Dockerfile (e.g. when customizing it).
+    image: ghcr.io/generacy-ai/cluster-microservices:preview
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
     command: /usr/local/bin/entrypoint-orchestrator.sh
     user: node
     privileged: true
     restart: unless-stopped
+    tmpfs:
+      # in-cluster control-plane HTTP service socket, owned by the node uid
+      - /run/generacy-control-plane:mode=1750,uid=1000,gid=1000
+      # Rendered secret app-config env vars (`secrets.env`). Written by the
+      # control-plane daemon on PUT and re-rendered at boot from the encrypted
+      # ClusterLocalBackend — see generacy-ai/generacy#632. Tmpfs because the
+      # plaintext rendering must never hit disk.
+      - /run/generacy-app-config:mode=1750,uid=1000,gid=1000
     stop_grace_period: 30s
     volumes:
       # Clone mode: persistent volume avoids host mount issues (especially on Windows)
@@ -35,6 +47,21 @@ services:
       - shared-packages:/shared-packages
       # npm cache persistence (speeds up repeated installs)
       - npm-cache:/home/node/.npm
+      # VS Code CLI auth state — survives `docker compose down && up` so the
+      # tunnel (started by control-plane's vscode-tunnel-start lifecycle action)
+      # doesn't re-prompt for GitHub device-code auth on every cluster recreate.
+      # Orchestrator only — the tunnel daemon never runs on workers.
+      # Path is /home/node/.vscode/cli (where `code` 1.95.3 actually persists
+      # token.json and tunnel-stable.lock), NOT /home/node/.vscode-cli.
+      - vscode-cli-state:/home/node/.vscode/cli
+      # App-config state dir: holds the control-plane daemon's materialized
+      # non-secret env file (/var/lib/generacy-app-config/env) and metadata
+      # YAML (values.yaml). Mode 0750 owned by node:node — set in the image
+      # and inherited by the named volume on first-init. Persists across
+      # `docker compose down && up` so app-config values entered via the
+      # bootstrap wizard / Settings panel don't have to be re-entered on
+      # cluster restart.
+      - generacy-app-config-data:/var/lib/generacy-app-config
     env_file:
       - path: .env
       - path: .env.local
@@ -47,6 +74,7 @@ services:
       - ORCHESTRATOR_PORT=${ORCHESTRATOR_PORT:-3100}
       - WORKSPACE_DIR=${WORKSPACE_DIR:-}
       - GENERACY_CHANNEL=${GENERACY_CHANNEL:-stable}
+      - GENERACY_BOOTSTRAP_MODE=${GENERACY_BOOTSTRAP_MODE:-devcontainer}
       - SKIP_PACKAGE_UPDATE=${SKIP_PACKAGE_UPDATE:-false}
       # Enable Docker-in-Docker for standalone mode (entrypoint starts dockerd)
       - ENABLE_DIND=true
@@ -69,13 +97,31 @@ services:
   # Workers: headless Claude Code agents
   # Scale with WORKER_COUNT env var (default: 3)
   worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    # Default: pull the pre-built image from the registry (same image as the
+    # orchestrator — entrypoint differentiates the two roles).
+    # Power users: comment the line below and uncomment the build: block to
+    # build locally from this repo's Dockerfile.
+    image: ghcr.io/generacy-ai/cluster-microservices:preview
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
     command: /usr/local/bin/entrypoint-worker.sh
     user: node
     privileged: true
     restart: unless-stopped
+    tmpfs:
+      # credhelper control socket lives here, owned by the credhelper uid
+      - /run/generacy-credhelper:mode=1750,uid=1002,gid=1000
+      # in-cluster control-plane HTTP service socket, owned by the node uid
+      - /run/generacy-control-plane:mode=1750,uid=1000,gid=1000
+      # Rendered secret app-config env vars (`secrets.env`). Mirrors the
+      # orchestrator tmpfs so worker-side processes have the same surface for
+      # sourcing app-config secrets — keeps dev/testing parity between
+      # orchestrator and worker. Propagation of secret content from the
+      # orchestrator's control-plane to per-worker tmpfs is TBD (see issue #38
+      # Open question / generacy-ai/generacy#632); the tmpfs is in place ahead
+      # of that wiring.
+      - /run/generacy-app-config:mode=1750,uid=1000,gid=1000
     stop_grace_period: 30s
     deploy:
       replicas: ${WORKER_COUNT:-3}
@@ -85,6 +131,16 @@ services:
       - ~/.claude.json:/home/node/.claude.json
       # Shared packages volume (read-only: workers consume packages installed by orchestrator)
       - shared-packages:/shared-packages:ro
+      # Credentials state dir: holds the cluster-local sealed store and master.key.
+      # Mode 0700 owned by uid 1000 (node) — set in the image and inherited by
+      # the named volume on first-init. The credhelper uid (1002) writes
+      # master.key inside as 0600 owned by 1002.
+      - generacy-data:/var/lib/generacy
+      # App-config state dir (read-only on workers): orchestrator's control-plane
+      # daemon writes the materialized non-secret env file
+      # (/var/lib/generacy-app-config/env) and metadata YAML; workers consume.
+      # Read-only because only the orchestrator writes.
+      - generacy-app-config-data:/var/lib/generacy-app-config:ro
     env_file:
       - path: .env
       - path: .env.local
@@ -97,6 +153,7 @@ services:
       - HEALTH_PORT=9001
       - WORKSPACE_DIR=${WORKSPACE_DIR:-}
       - GENERACY_CHANNEL=${GENERACY_CHANNEL:-stable}
+      - GENERACY_BOOTSTRAP_MODE=${GENERACY_BOOTSTRAP_MODE:-devcontainer}
       - SKIP_PACKAGE_UPDATE=${SKIP_PACKAGE_UPDATE:-false}
       # Enable Docker-in-Docker for standalone mode (entrypoint starts dockerd)
       - ENABLE_DIND=true
@@ -142,6 +199,16 @@ volumes:
   shared-packages:
   # npm cache: speeds up repeated package installs on orchestrator restart
   npm-cache:
+  # Credentials state: cluster-local sealed credential store and master.key
+  generacy-data:
+  # App-config state: control-plane daemon's materialized env file and metadata YAML
+  generacy-app-config-data:
+  # VS Code CLI auth state for the orchestrator's `code tunnel` daemon.
+  # Renamed from `vscode-cli` (which mounted at the wrong path) so Docker
+  # provisions a fresh volume at the correct location. Existing clusters will
+  # have a stale `<project>_vscode-cli` volume that can be removed with
+  # `docker volume prune`.
+  vscode-cli-state:
 
 networks:
   # Isolated cluster network
