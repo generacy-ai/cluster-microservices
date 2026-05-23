@@ -1,0 +1,5 @@
+# Runtime state written by the orchestrator — never commit.
+# See generacy-ai/generacy#709: orchestrator now writes runtime mutations
+# (e.g. worker replica count after scale) to cluster.local.yaml instead of
+# the git-tracked cluster.yaml.
+.generacy/cluster.local.yaml
