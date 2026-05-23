@@ -5,10 +5,7 @@
 # (or immediately for settings the orchestrator watches at runtime).
 
 channel: stable          # preview | stable — determines package versions and update source
-
-workers:
-  count: 3               # number of worker containers
-  enabled: true          # global worker enable/disable
+workers: 3               # number of worker dev-container replicas
 
 # Future extension points (not yet implemented):
 # resources:
