@@ -188,6 +188,21 @@ if [ -f "$SECRET_APP_ENV" ]; then
     set +a
 fi
 
+# Ensure the orchestrator process runs with its CWD inside the user's repo.
+# `process.cwd()` is what orchestrator-side file resolution falls back to —
+# /files?path=… (files.ts) and readClusterYaml (relay-bridge.ts) both
+# resolve workspace-relative paths against it. Without this cd, CWD stays
+# at the Dockerfile's WORKDIR (/workspaces) and every workspace-relative
+# read lands one level too high (e.g. /workspaces/.generacy/cluster.yaml
+# instead of /workspaces/<repo>/.generacy/cluster.yaml), which the cloud UI
+# surfaces as "Configuration Not Found".
+if [ -n "${WORKSPACE_DIR:-}" ] && [ -d "$WORKSPACE_DIR" ]; then
+    log "Changing CWD to workspace: $WORKSPACE_DIR"
+    cd "$WORKSPACE_DIR"
+else
+    log "WARNING: WORKSPACE_DIR not set or missing; orchestrator CWD will be $(pwd) — workspace-relative file reads will fail"
+fi
+
 # Start orchestrator as PID 1
 log "Starting orchestrator on port ${ORCHESTRATOR_PORT:-3100}..."
 exec generacy orchestrator \
