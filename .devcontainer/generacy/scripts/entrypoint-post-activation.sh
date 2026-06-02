@@ -20,10 +20,25 @@
 #   2. Re-run resolve-workspace.sh to perform the deferred clone.
 #   3. Run `generacy setup workspace` + `generacy setup build` against the
 #      now-populated workspace so workers can pick up speckit.
+#   4. Mark post-activation complete (completion flag) ONLY when the workspace
+#      was actually produced.
 #
 # Idempotent — safe to invoke multiple times.
+#
+# Failure contract (generacy-ai/cluster-base#54): when REPO_URL names a primary
+# repo that still needs cloning, GH_TOKEN MUST be present. A token-less clone of
+# a private repo no-ops, and because the watcher is one-shot a silent success
+# would leave the cluster with no workspace and never retry. So we refuse to
+# proceed without the token and exit non-zero. The orchestrator's
+# PostActivationRetryService keys its retry off the completion flag
+# (needsRetry = activated && !postActivationComplete), so NOT writing the flag
+# on failure is what makes the clone get retried once credentials land.
 
 set -e
+
+# Completion flag the orchestrator's PostActivationRetryService watches. Written
+# only on confirmed success (workspace present) — see end of script.
+COMPLETION_FLAG="${POST_ACTIVATION_COMPLETE_FLAG:-/var/lib/generacy/post-activation-complete}"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [post-activation] $*"
@@ -55,6 +70,27 @@ for app_env in /var/lib/generacy-app-config/env /run/generacy-app-config/secrets
     fi
 done
 
+# Determine whether a primary-repo clone still has to happen. Mirrors the path
+# derivation in resolve-workspace.sh so we can check before doing any work.
+CLONE_REQUIRED=false
+if [ -n "${REPO_URL:-}" ]; then
+    REPO_NAME=$(basename "${REPO_URL%.git}")
+    EXPECTED_WORKSPACE="${WORKSPACE_DIR:-/workspaces/${REPO_NAME}}"
+    if [ ! -d "${EXPECTED_WORKSPACE}/.git" ]; then
+        CLONE_REQUIRED=true
+    fi
+fi
+
+# Guard: a token-less clone of a private repo silently no-ops. If a clone is
+# required but GH_TOKEN is absent, refuse to proceed and exit non-zero so the
+# completion flag is never written and the retry service re-runs us once the
+# credentials arrive (see Failure contract above; generacy-ai/cluster-base#54).
+if [ "$CLONE_REQUIRED" = true ] && [ -z "${GH_TOKEN:-}" ]; then
+    log "ERROR: primary repo clone required (REPO_URL=${REPO_URL}) but GH_TOKEN is missing/empty."
+    log "Refusing a token-less clone — exiting non-zero so post-activation is retried once credentials land."
+    exit 1
+fi
+
 # Step 1: configure git/gh credentials from the env vars the wizard delivered
 bash /usr/local/bin/setup-credentials.sh
 
@@ -62,6 +98,16 @@ bash /usr/local/bin/setup-credentials.sh
 # WORKSPACE_DIR and the wizard-mode branch is a no-op once GENERACY_BOOTSTRAP_MODE
 # is removed/changed; for now force the clone branch by unsetting it locally.
 GENERACY_BOOTSTRAP_MODE="" source /usr/local/bin/resolve-workspace.sh
+
+# Verify the clone actually produced the workspace. resolve-workspace.sh's
+# "pull" branch swallows fetch/pull errors, so a no-op can otherwise look like
+# success. If a clone was required but there's still no repo, bail without
+# marking complete so the retry service tries again.
+if [ "$CLONE_REQUIRED" = true ] && [ ! -d "${WORKSPACE_DIR}/.git" ]; then
+    log "ERROR: clone did not produce a workspace at ${WORKSPACE_DIR} (.git missing)."
+    log "Not marking post-activation complete — retry service will re-run."
+    exit 1
+fi
 
 # Step 3: run the workspace-dependent generacy setup. Mirrors the block in
 # entrypoint-orchestrator.sh that gets skipped during wizard-mode boot.
@@ -88,5 +134,13 @@ if command -v generacy >/dev/null 2>&1; then
 else
     log "WARNING: generacy CLI not on PATH — skipping setup. Restart the orchestrator container to install."
 fi
+
+# Mark complete only now that the workspace is confirmed present. The
+# orchestrator's PostActivationRetryService treats this flag as "done" and stops
+# retrying — so it must never be written on a failed/no-op clone (the guards
+# above exit non-zero before reaching here in that case).
+mkdir -p "$(dirname "$COMPLETION_FLAG")"
+: > "$COMPLETION_FLAG"
+log "Marked post-activation complete: $COMPLETION_FLAG"
 
 log "Post-activation setup complete"
