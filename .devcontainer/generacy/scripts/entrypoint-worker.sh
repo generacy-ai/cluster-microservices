@@ -28,6 +28,23 @@ log "Starting worker setup..."
 # Start Docker-in-Docker daemon (workers get DinD but not host context)
 bash /usr/local/bin/setup-docker-dind.sh
 
+# Source wizard-delivered credentials persisted by a prior bootstrap (written
+# by control-plane's bootstrap-complete handler — see generacy-ai/generacy#589).
+# On an already-bootstrapped cluster GH_TOKEN lives only in this file; without
+# it, setup-credentials.sh warns and the clone in resolve-workspace.sh (and the
+# per-job clone in the worker) fails auth with "could not read Username for
+# 'https://github.com'". Mirrors the identical block in entrypoint-orchestrator.sh
+# and entrypoint-post-activation.sh so the worker has the same credentials as the
+# orchestrator (generacy-ai/generacy#632).
+WIZARD_CREDS="${WIZARD_CREDS_PATH:-/var/lib/generacy/wizard-credentials.env}"
+if [ -f "$WIZARD_CREDS" ]; then
+    log "Sourcing wizard credentials from $WIZARD_CREDS"
+    set -a
+    # shellcheck disable=SC1090
+    source "$WIZARD_CREDS"
+    set +a
+fi
+
 # Source app-config env vars set via the bootstrap wizard / Settings panel so
 # worker + child processes (agent workflows, MCP servers, user services)
 # inherit user-configured values like LIVEKIT_URL, SERVICE_ANTHROPIC_API_KEY.
