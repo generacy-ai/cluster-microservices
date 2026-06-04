@@ -27,14 +27,19 @@ set -u
 TRIGGER="${1:-${POST_ACTIVATION_TRIGGER:-/tmp/generacy-bootstrap-complete}}"
 POLL_INTERVAL="${POST_ACTIVATION_POLL_INTERVAL:-2}"
 LOG_FILE="${POST_ACTIVATION_LOG:-/tmp/post-activation.log}"
+# Belt-and-suspenders (generacy-ai/cluster-base#54): also wait for the wizard
+# credentials file. Control-plane writes it before the sentinel, so this is a
+# no-op on the normal path — it only guards against an early/buggy sentinel
+# firing the one-shot hook before any credentials exist.
+WIZARD_CREDS="${WIZARD_CREDS_PATH:-/var/lib/generacy/wizard-credentials.env}"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [post-activation-watcher] $*"
 }
 
-log "Watching ${TRIGGER} (poll every ${POLL_INTERVAL}s)..."
+log "Watching ${TRIGGER} + ${WIZARD_CREDS} (poll every ${POLL_INTERVAL}s)..."
 
-while [ ! -e "${TRIGGER}" ]; do
+while [ ! -e "${TRIGGER}" ] || [ ! -f "${WIZARD_CREDS}" ]; do
     sleep "${POLL_INTERVAL}"
 done
 
