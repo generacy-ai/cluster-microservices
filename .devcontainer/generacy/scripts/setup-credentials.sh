@@ -24,7 +24,8 @@
 #     the helper talks to it directly via the default control socket.
 #   - Workers have no local control-plane; the worker entrypoint points them at
 #     the git-token proxy socket (a shared volume) by exporting
-#     GIT_TOKEN_SOCKET_PATH before calling this script. See git-token-proxy.js.
+#     GIT_TOKEN_SOCKET_PATH before calling this script. The proxy ships in
+#     @generacy-ai/control-plane (generacy-ai/generacy#768).
 
 set -e
 

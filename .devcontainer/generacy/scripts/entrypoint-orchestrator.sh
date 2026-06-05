@@ -179,15 +179,20 @@ fi
 # the workers and forwards ONLY POST /git-token to the real control socket —
 # giving workers the "mint a git token" capability without exposing the rest of
 # the control-plane API. It runs only on the orchestrator (the sole holder of
-# the control socket + cluster API key). See git-token-proxy.js.
+# the control socket + cluster API key). The proxy itself ships in
+# @generacy-ai/control-plane (generacy-ai/generacy#768) — co-located with the
+# git-credential-generacy helper it serves — so cluster-base only launches it
+# from the shared-packages install; the logic is typed, tested, and versioned
+# with the control-plane /git-token route it forwards.
 GIT_TOKEN_PROXY_SOCKET="${GIT_TOKEN_PROXY_SOCKET:-/run/generacy-git-token/control.sock}"
 export GIT_TOKEN_PROXY_SOCKET
 GIT_TOKEN_PROXY_LOG="${GIT_TOKEN_PROXY_LOG:-/tmp/git-token-proxy.log}"
-if [ -f /usr/local/bin/git-token-proxy.js ]; then
+GIT_TOKEN_PROXY_JS="${GIT_TOKEN_PROXY_JS:-${SHARED_PACKAGES}/node_modules/@generacy-ai/control-plane/dist/bin/git-token-proxy.js}"
+if [ -f "${GIT_TOKEN_PROXY_JS}" ]; then
     log "Starting git-token proxy (socket: ${GIT_TOKEN_PROXY_SOCKET}, log: ${GIT_TOKEN_PROXY_LOG})"
     GIT_TOKEN_PROXY_SOCKET="${GIT_TOKEN_PROXY_SOCKET}" \
         CONTROL_PLANE_SOCKET_PATH="${CONTROL_PLANE_SOCKET_PATH}" \
-        node /usr/local/bin/git-token-proxy.js >>"${GIT_TOKEN_PROXY_LOG}" 2>&1 &
+        node "${GIT_TOKEN_PROXY_JS}" >>"${GIT_TOKEN_PROXY_LOG}" 2>&1 &
     for _ in $(seq 1 50); do
         [ -S "${GIT_TOKEN_PROXY_SOCKET}" ] && break
         sleep 0.2
@@ -198,7 +203,7 @@ if [ -f /usr/local/bin/git-token-proxy.js ]; then
         log "WARNING: git-token proxy socket not ready after 10s (see ${GIT_TOKEN_PROXY_LOG}) — worker git auth will fail until it comes up"
     fi
 else
-    log "WARNING: git-token-proxy.js not found — worker git operations will not be able to fetch JIT tokens"
+    log "WARNING: git-token proxy not found at ${GIT_TOKEN_PROXY_JS} (from @generacy-ai/control-plane) — worker git operations will not be able to fetch JIT tokens"
 fi
 
 # Source app-config secrets — must happen AFTER the control-plane daemon binds
