@@ -144,6 +144,16 @@ RUN mkdir -p /var/lib/generacy-app-config \
  && chown node:node /var/lib/generacy-app-config \
  && chmod 0750 /var/lib/generacy-app-config
 
+# Pre-create the git-token proxy socket dir so the shared named-volume mount
+# inherits node ownership/mode on first-init (generacy-ai/cluster-base#61).
+# Mode 0750 owned node:node: the orchestrator (uid 1000) creates the proxy
+# socket here, and worker-side git processes that share the `node` group
+# (including uid-1001 agent workflows) get group r-x to traverse in and connect
+# to the 0660 socket; other/world is excluded.
+RUN mkdir -p /run/generacy-git-token \
+ && chown node:node /run/generacy-git-token \
+ && chmod 0750 /run/generacy-git-token
+
 # Pre-create the VS Code CLI state dir so the named-volume mount inherits node
 # ownership on first-init. `code` 1.95.3 writes tunnel auth state (token.json,
 # tunnel-stable.lock) to /home/node/.vscode/cli/. Without this pre-create,

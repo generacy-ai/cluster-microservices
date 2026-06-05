@@ -173,6 +173,34 @@ else
     log "WARNING: control-plane binary not found in ${SHARED_PACKAGES}/node_modules/.bin/ — relay-forwarded /control-plane/* requests will 404"
 fi
 
+# Start the git-token proxy (generacy-ai/cluster-base#61). Workers have no local
+# control-plane, so they cannot reach the JIT git credential helper's control
+# socket directly. This proxy listens on a socket placed on a volume shared with
+# the workers and forwards ONLY POST /git-token to the real control socket —
+# giving workers the "mint a git token" capability without exposing the rest of
+# the control-plane API. It runs only on the orchestrator (the sole holder of
+# the control socket + cluster API key). See git-token-proxy.js.
+GIT_TOKEN_PROXY_SOCKET="${GIT_TOKEN_PROXY_SOCKET:-/run/generacy-git-token/control.sock}"
+export GIT_TOKEN_PROXY_SOCKET
+GIT_TOKEN_PROXY_LOG="${GIT_TOKEN_PROXY_LOG:-/tmp/git-token-proxy.log}"
+if [ -f /usr/local/bin/git-token-proxy.js ]; then
+    log "Starting git-token proxy (socket: ${GIT_TOKEN_PROXY_SOCKET}, log: ${GIT_TOKEN_PROXY_LOG})"
+    GIT_TOKEN_PROXY_SOCKET="${GIT_TOKEN_PROXY_SOCKET}" \
+        CONTROL_PLANE_SOCKET_PATH="${CONTROL_PLANE_SOCKET_PATH}" \
+        node /usr/local/bin/git-token-proxy.js >>"${GIT_TOKEN_PROXY_LOG}" 2>&1 &
+    for _ in $(seq 1 50); do
+        [ -S "${GIT_TOKEN_PROXY_SOCKET}" ] && break
+        sleep 0.2
+    done
+    if [ -S "${GIT_TOKEN_PROXY_SOCKET}" ]; then
+        log "git-token proxy socket ready"
+    else
+        log "WARNING: git-token proxy socket not ready after 10s (see ${GIT_TOKEN_PROXY_LOG}) — worker git auth will fail until it comes up"
+    fi
+else
+    log "WARNING: git-token-proxy.js not found — worker git operations will not be able to fetch JIT tokens"
+fi
+
 # Source app-config secrets — must happen AFTER the control-plane daemon binds
 # its socket because the daemon is what renders /run/generacy-app-config/secrets.env
 # from the encrypted ClusterLocalBackend (see generacy-ai/generacy#632). The
