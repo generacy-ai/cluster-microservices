@@ -192,6 +192,24 @@ restart_cluster_containers() {
         return 0
     fi
 
+    # cluster-microservices divergence from cluster-base: here the docker CLI's
+    # default context is the in-container DinD daemon (setup-docker-dind.sh runs
+    # `docker context use default`), NOT the host daemon. The sibling
+    # orchestrator/worker containers are owned by the HOST daemon, reachable via
+    # the DooD socket /var/run/docker-host.sock — the same socket the
+    # orchestrator's worker-scaler and control-plane target. Point our docker
+    # calls at it so inspect/ps/restart hit the daemon that actually owns these
+    # containers; otherwise they'd query DinD, find no siblings, and silently
+    # no-op. (cluster-base sets ENV DOCKER_HOST to this value image-wide, so it
+    # has no such block — this is the microservices-specific adaptation.)
+    HOST_DOCKER_SOCK="${HOST_DOCKER_SOCK:-/var/run/docker-host.sock}"
+    if [ -S "$HOST_DOCKER_SOCK" ]; then
+        export DOCKER_HOST="unix://${HOST_DOCKER_SOCK}"
+        log "Targeting host docker daemon for container restart ($DOCKER_HOST)"
+    else
+        log "WARNING: host docker socket ${HOST_DOCKER_SOCK} not present — docker calls will hit the default (DinD) context and may not find sibling containers."
+    fi
+
     # Identify ourselves and our compose project from our own container labels.
     # `hostname` is the container's short id under compose (no custom hostname
     # is set in docker-compose.yml), which `docker inspect` accepts.
