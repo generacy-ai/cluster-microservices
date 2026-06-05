@@ -125,8 +125,11 @@ elif command -v generacy >/dev/null 2>&1; then
 fi
 
 # Pre-flight: verify speckit readiness.
-# Skip in wizard mode — speckit lives in the not-yet-cloned workspace; the worker
-# will idle until post-activation completes setup and a restart picks it up.
+# Skip in wizard mode — speckit lives in the not-yet-cloned workspace. The worker
+# idles in this state until post-activation completes setup and restarts the
+# worker containers (entrypoint-post-activation.sh step 5,
+# generacy-ai/cluster-base#59); that restart re-runs this entrypoint with creds +
+# repo present, so the verify below then runs against a populated workspace.
 if [ "${GENERACY_BOOTSTRAP_MODE:-devcontainer}" != "wizard" ] && [ -x "/usr/local/bin/setup-speckit.sh" ]; then
     if ! bash /usr/local/bin/setup-speckit.sh --verify; then
         log "FATAL: Speckit commands not available. Worker cannot process phases."
