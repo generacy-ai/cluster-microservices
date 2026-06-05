@@ -22,8 +22,19 @@
 #      now-populated workspace so workers can pick up speckit.
 #   4. Mark post-activation complete (completion flag) ONLY when the workspace
 #      was actually produced.
+#   5. Restart the cluster's containers ONCE (generacy-ai/cluster-base#59) so
+#      every entrypoint re-runs with credentials + repo present:
+#        - workers re-source wizard-credentials.env, get GH_TOKEN, and clone;
+#        - the orchestrator re-resolves monitored repos + cluster identity and
+#          (re)enables the label monitor it had disabled at empty-boot.
+#      This is the "restart-based" fix: on a brand-new wizard cluster the
+#      containers boot BEFORE post-activation delivers creds/repo, latch the
+#      empty state, and nothing re-runs setup — so we trigger that re-run here.
 #
-# Idempotent — safe to invoke multiple times.
+# Idempotent — safe to invoke multiple times. The restart in step 5 is the one
+# exception that must fire only once; it is gated on a one-shot marker file (see
+# RESTART_DONE_MARKER below) so the post-restart re-run of this hook does not
+# loop the cluster.
 #
 # Failure contract (generacy-ai/cluster-base#54): when REPO_URL names a primary
 # repo that still needs cloning, GH_TOKEN MUST be present. A token-less clone of
@@ -39,6 +50,15 @@ set -e
 # Completion flag the orchestrator's PostActivationRetryService watches. Written
 # only on confirmed success (workspace present) — see end of script.
 COMPLETION_FLAG="${POST_ACTIVATION_COMPLETE_FLAG:-/var/lib/generacy/post-activation-complete}"
+
+# One-shot marker for the step-5 container restart (generacy-ai/cluster-base#59).
+# Lives alongside the completion flag in /var/lib/generacy: that path is on the
+# orchestrator's writable layer, so it SURVIVES a `docker restart` (same
+# container, layer preserved) but is RESET on `docker compose down && up` (fresh
+# container) — exactly the lifecycle we want. A fresh wizard cluster has no
+# marker → we restart once; the post-restart re-run of this hook sees the marker
+# → skips the restart, so the cluster never loops.
+RESTART_DONE_MARKER="${POST_ACTIVATION_RESTART_MARKER:-/var/lib/generacy/post-activation-restart-done}"
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [post-activation] $*"
@@ -142,5 +162,99 @@ fi
 mkdir -p "$(dirname "$COMPLETION_FLAG")"
 : > "$COMPLETION_FLAG"
 log "Marked post-activation complete: $COMPLETION_FLAG"
+
+# Step 5 (generacy-ai/cluster-base#59): re-initialize the cluster's containers
+# once, now that creds + repo are present, so the empty-boot state every
+# entrypoint latched gets re-run.
+#
+# Why a restart and not in-process re-resolution: the orchestrator resolves
+# monitored repos + cluster identity once at server start and disables the
+# label monitor when no repo is cloned yet; the workers source
+# wizard-credentials.env + run setup-credentials.sh once at entrypoint,
+# pre-activation. None of those re-read their inputs while running. Restarting
+# the containers re-runs every entrypoint from the top with creds + repo in
+# place — the simplest fix that lives entirely in this repo.
+#
+# This runs from inside the orchestrator, which has the host docker socket
+# (DOCKER_HOST=unix:///var/run/docker-host.sock) and already manages the worker
+# containers, so it can restart its siblings and itself.
+restart_cluster_containers() {
+    # Already restarted on a prior run of this hook (e.g. the post-restart
+    # re-run, or a PostActivationRetryService retry) — do not loop the cluster.
+    if [ -e "$RESTART_DONE_MARKER" ]; then
+        log "Container restart already performed ($RESTART_DONE_MARKER present) — skipping."
+        return 0
+    fi
+
+    if ! command -v docker >/dev/null 2>&1; then
+        log "WARNING: docker CLI not available — cannot auto-restart containers."
+        log "WARNING: restart the orchestrator and worker containers manually to finish activation."
+        return 0
+    fi
+
+    # cluster-microservices divergence from cluster-base: here the docker CLI's
+    # default context is the in-container DinD daemon (setup-docker-dind.sh runs
+    # `docker context use default`), NOT the host daemon. The sibling
+    # orchestrator/worker containers are owned by the HOST daemon, reachable via
+    # the DooD socket /var/run/docker-host.sock — the same socket the
+    # orchestrator's worker-scaler and control-plane target. Point our docker
+    # calls at it so inspect/ps/restart hit the daemon that actually owns these
+    # containers; otherwise they'd query DinD, find no siblings, and silently
+    # no-op. (cluster-base sets ENV DOCKER_HOST to this value image-wide, so it
+    # has no such block — this is the microservices-specific adaptation.)
+    HOST_DOCKER_SOCK="${HOST_DOCKER_SOCK:-/var/run/docker-host.sock}"
+    if [ -S "$HOST_DOCKER_SOCK" ]; then
+        export DOCKER_HOST="unix://${HOST_DOCKER_SOCK}"
+        log "Targeting host docker daemon for container restart ($DOCKER_HOST)"
+    else
+        log "WARNING: host docker socket ${HOST_DOCKER_SOCK} not present — docker calls will hit the default (DinD) context and may not find sibling containers."
+    fi
+
+    # Identify ourselves and our compose project from our own container labels.
+    # `hostname` is the container's short id under compose (no custom hostname
+    # is set in docker-compose.yml), which `docker inspect` accepts.
+    local self_container compose_project
+    self_container="$(hostname)"
+    compose_project="$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.project" }}' "$self_container" 2>/dev/null || true)"
+
+    if [ -z "$compose_project" ]; then
+        log "WARNING: could not determine compose project from container labels — cannot auto-restart containers."
+        log "WARNING: restart the orchestrator and worker containers manually to finish activation."
+        return 0
+    fi
+
+    # Restart the worker containers first (they only need creds + repo, not a
+    # fresh orchestrator). Match by the standard compose labels for this project.
+    local worker_ids
+    worker_ids="$(docker ps -q \
+        --filter "label=com.docker.compose.project=${compose_project}" \
+        --filter "label=com.docker.compose.service=worker" 2>/dev/null || true)"
+
+    if [ -n "$worker_ids" ]; then
+        # shellcheck disable=SC2086 — word-splitting the id list is intended.
+        log "Restarting worker containers: $(echo $worker_ids | tr '\n' ' ')"
+        # shellcheck disable=SC2086
+        docker restart $worker_ids >/dev/null 2>&1 \
+            || log "WARNING: one or more worker restarts failed — check 'docker ps'."
+    else
+        log "No worker containers found for project '${compose_project}' — nothing to restart."
+    fi
+
+    # Write the marker BEFORE restarting ourselves: once the orchestrator
+    # restarts, the watcher re-fires this hook, which must find the marker and
+    # skip this whole block. (The restart kills this process, so anything after
+    # the self-restart line will not run.)
+    : > "$RESTART_DONE_MARKER"
+    log "Wrote restart marker: $RESTART_DONE_MARKER"
+
+    # Restart ourselves last. This re-runs entrypoint-orchestrator.sh with the
+    # repo cloned and GH_USERNAME populated, so it resolves cluster identity and
+    # re-enables the label monitor. SIGTERM lands here and the process exits.
+    log "Restarting orchestrator container '${self_container}' to re-resolve repos + identity and enable the label monitor..."
+    docker restart "$self_container" >/dev/null 2>&1 \
+        || log "WARNING: orchestrator self-restart failed — restart the orchestrator container manually to enable the label monitor."
+}
+
+restart_cluster_containers
 
 log "Post-activation setup complete"
