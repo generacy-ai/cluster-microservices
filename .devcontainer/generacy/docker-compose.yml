@@ -62,6 +62,13 @@ services:
       # bootstrap wizard / Settings panel don't have to be re-entered on
       # cluster restart.
       - generacy-app-config-data:/var/lib/generacy-app-config
+      # git-token proxy socket dir (generacy-ai/cluster-base#61). Shared with
+      # the workers so the orchestrator-hosted proxy's Unix socket is reachable
+      # cross-container. Named volume (not tmpfs) because tmpfs is per-container
+      # and a Unix socket must live on a mount both containers can see. Holds
+      # only the socket — no secrets. Mode/ownership inherited from the image's
+      # pre-created node-owned dir on first-init.
+      - git-token-proxy:/run/generacy-git-token
     env_file:
       - path: .env
       - path: .env.local
@@ -141,6 +148,11 @@ services:
       # (/var/lib/generacy-app-config/env) and metadata YAML; workers consume.
       # Read-only because only the orchestrator writes.
       - generacy-app-config-data:/var/lib/generacy-app-config:ro
+      # git-token proxy socket dir (generacy-ai/cluster-base#61). Same shared
+      # volume the orchestrator hosts the proxy socket on; the worker's JIT git
+      # credential helper connects here to mint fresh installation tokens.
+      # NOT read-only: connect() to a Unix socket requires write access.
+      - git-token-proxy:/run/generacy-git-token
     env_file:
       - path: .env
       - path: .env.local
@@ -203,6 +215,9 @@ volumes:
   generacy-data:
   # App-config state: control-plane daemon's materialized env file and metadata YAML
   generacy-app-config-data:
+  # git-token proxy socket: shared so the orchestrator-hosted proxy's Unix
+  # socket is reachable from worker containers (generacy-ai/cluster-base#61).
+  git-token-proxy:
   # VS Code CLI auth state for the orchestrator's `code tunnel` daemon.
   # Renamed from `vscode-cli` (which mounted at the wrong path) so Docker
   # provisions a fresh volume at the correct location. Existing clusters will

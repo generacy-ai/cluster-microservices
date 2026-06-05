@@ -64,7 +64,17 @@ for app_env in /var/lib/generacy-app-config/env /run/generacy-app-config/secrets
     fi
 done
 
-# Configure git credentials
+# Configure git credentials.
+#
+# Workers have no local control-plane daemon, so the JIT git credential helper
+# (generacy-ai/cluster-base#61) cannot reach the control socket directly. Point
+# it at the orchestrator-hosted git-token proxy, whose socket lives on a volume
+# shared with this container. setup-credentials.sh bakes this path into git
+# config so later git ops (including agent workflows under a different uid)
+# route through it. The proxy ships in @generacy-ai/control-plane
+# (generacy-ai/generacy#768); the orchestrator launches it — see
+# entrypoint-orchestrator.sh.
+export GIT_TOKEN_SOCKET_PATH="${GIT_TOKEN_PROXY_SOCKET:-/run/generacy-git-token/control.sock}"
 bash /usr/local/bin/setup-credentials.sh
 
 # Resolve workspace directory (handles devcontainer detection + clone)
