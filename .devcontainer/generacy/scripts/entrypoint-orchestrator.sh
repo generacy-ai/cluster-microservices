@@ -42,6 +42,12 @@ fi
 # Configure git credentials
 bash /usr/local/bin/setup-credentials.sh
 
+# Keep the JIT git credential helper authoritative if VS Code (attached over a
+# `code tunnel`) rewrites ~/.gitconfig back to a static, expiring token
+# (generacy-ai/cluster-base#66). Backgrounded; self-exits outside wizard mode.
+# Runs as node (this entrypoint's user) so it edits /home/node/.gitconfig.
+bash /usr/local/bin/git-helper-guard.sh &
+
 # Resolve workspace directory (handles devcontainer detection + clone)
 source /usr/local/bin/resolve-workspace.sh
 
