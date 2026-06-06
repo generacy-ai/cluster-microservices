@@ -1,0 +1,23 @@
+{
+  // Default VS Code settings (generacy-ai/cluster-base#66). Seeded for both
+  // Coder code-server (~/.local/share/code-server/User) and the Microsoft VS
+  // Code Server used by `code tunnel` (~/.vscode-server/data/Machine) — see the
+  // Dockerfile.
+  //
+  // Disable VS Code's built-in git/GitHub credential management. When enabled,
+  // VS Code's git+GitHub integration rewrites ~/.gitconfig back to
+  // credential.helper=store + the gh-CLI helper (`!/usr/bin/gh auth
+  // git-credential`) and caches a static `ghs_` token in ~/.git-credentials —
+  // clobbering the JIT git credential helper that setup-credentials.sh installs
+  // at activation. That static token then expires ~1h later, breaking git auth
+  // for anyone working inside the container.
+  //
+  // Best-effort only: github.gitAuthentication is window-scoped and cannot be
+  // pinned from machine-level defaults (nor against the user's synced settings),
+  // so git-helper-guard.sh re-asserts the JIT helper on drift as the real
+  // guarantee. With these off, VS Code leaves ~/.gitconfig (and the JIT helper)
+  // alone in the common case.
+  "github.gitAuthentication": false,
+  "git.terminalAuthentication": false,
+  "git.useIntegratedAskPass": false
+}

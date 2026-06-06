@@ -29,7 +29,10 @@
         "anthropics.claude-code"
       ],
       "settings": {
-        "dev.containers.gitCredentialHelperConfigLocation": "none"
+        "dev.containers.gitCredentialHelperConfigLocation": "none",
+        "github.gitAuthentication": false,
+        "git.terminalAuthentication": false,
+        "git.useIntegratedAskPass": false
       }
     }
   },

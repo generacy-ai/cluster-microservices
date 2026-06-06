@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# JIT `gh` wrapper (generacy-ai/cluster-base#66).
+#
+# Unlike git, the GitHub CLI never consults a credential helper: it reads
+# GH_TOKEN / GITHUB_TOKEN from the environment and uses it exclusively. On a
+# wizard-mode cloud cluster the only GitHub token the container has is a 1-hour
+# `ghs_` installation token baked into the long-lived process env at boot, so
+# any later `gh` invocation — a code-server terminal, an in-container Claude
+# Code agent fixing PR checks — authenticates with a token that expires ~1h
+# after activation and never refreshes, producing `Bad credentials (HTTP 401)`.
+# The automated git path was already migrated to just-in-time tokens
+# (git-credential-generacy, generacy-ai/generacy#766); this shim completes that
+# migration for the interactive `gh` path.
+#
+# Installed ahead of the real gh (/usr/bin/gh) on PATH via the Dockerfile's
+# `COPY scripts/ /usr/local/bin/` (/usr/local/bin precedes /usr/bin). On every
+# invocation it mints a fresh installation token from the control-plane's
+# /git-token endpoint over a Unix socket, then execs the real gh with GH_TOKEN /
+# GITHUB_TOKEN overridden — mirroring the JIT git credential helper so `gh` gets
+# the same never-stale auth.
+#
+# Socket routing matches setup-credentials.sh's JIT git helper exactly:
+#   - orchestrator / post-activation run alongside the control-plane daemon and
+#     talk to it directly via the default control socket (below).
+#   - workers have no local control-plane; entrypoint-worker.sh exports
+#     GIT_TOKEN_SOCKET_PATH pointing at the orchestrator-hosted git-token proxy
+#     socket (a shared volume), and this shim picks it up from the environment.
+#
+# Fail-open: if the socket is missing or the mint fails (e.g. local-dev mode,
+# or control-plane not up yet during early boot), exec the real gh unchanged so
+# it falls back to whatever GH_TOKEN / hosts.yml auth exists — exactly as if
+# this shim were not present.
+
+set -uo pipefail
+
+REAL_GH="/usr/bin/gh"
+SOCKET="${GIT_TOKEN_SOCKET_PATH:-/run/generacy-control-plane/control.sock}"
+
+mint_token() {
+    [ -S "$SOCKET" ] || return 1
+    curl -fsS --max-time 5 --unix-socket "$SOCKET" \
+        -X POST http://localhost/git-token \
+        -H 'Content-Type: application/json' -d '{}' 2>/dev/null \
+        | sed -nE 's/.*"token"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p'
+}
+
+token="$(mint_token || true)"
+
+case "$token" in
+    ghs_*|gho_*|ghp_*|github_pat_*)
+        exec env GH_TOKEN="$token" GITHUB_TOKEN="$token" "$REAL_GH" "$@"
+        ;;
+    *)
+        exec "$REAL_GH" "$@"
+        ;;
+esac
