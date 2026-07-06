@@ -6,6 +6,12 @@
 
 SETUP_LOG="${SETUP_LOG:-/tmp/generacy-setup.log}"
 
+# Release channel for npm installs. GENERACY_CHANNEL is exported by
+# load-cluster-config.sh in the entrypoints that invoke this script, so a
+# preview cluster recovers the preview-channel packages. Mirrors
+# entrypoint-orchestrator.sh's CHANNEL derivation.
+CHANNEL="${GENERACY_CHANNEL:-stable}"
+
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [setup-speckit] $*"
 }
@@ -43,12 +49,22 @@ if [ "$1" = "--verify" ]; then
 fi
 
 # Full setup mode — recover speckit via npm (no git clone needed)
-log "Installing @generacy-ai/agency-plugin-spec-kit from npm..."
-npm install -g @generacy-ai/agency-plugin-spec-kit 2>>"$SETUP_LOG" || {
-    log "ERROR: npm install -g @generacy-ai/agency-plugin-spec-kit failed"
+log "Installing @generacy-ai/agency-plugin-spec-kit@${CHANNEL} from npm..."
+npm install -g "@generacy-ai/agency-plugin-spec-kit@${CHANNEL}" 2>>"$SETUP_LOG" || {
+    log "ERROR: npm install -g @generacy-ai/agency-plugin-spec-kit@${CHANNEL} failed"
     exit 1
 }
 log "agency-plugin-spec-kit installed"
+
+# Cockpit Claude Code plugin (generacy-ai/cluster-base#69). Best-effort: unlike
+# speckit this is an orchestrator-only convenience and NOT required for workers
+# to process phases, so a failure here (e.g. the package not yet published to
+# ${CHANNEL}) must not fail speckit recovery. The `generacy setup build` re-run
+# below wires /cockpit:* from it (G-S5) exactly as it does for speckit.
+log "Installing @generacy-ai/claude-plugin-cockpit@${CHANNEL} from npm (best-effort)..."
+npm install -g "@generacy-ai/claude-plugin-cockpit@${CHANNEL}" 2>>"$SETUP_LOG" \
+    && log "claude-plugin-cockpit installed" \
+    || log "WARNING: npm install -g @generacy-ai/claude-plugin-cockpit@${CHANNEL} failed — /cockpit:* may be unavailable (see $SETUP_LOG)"
 
 # Re-run generacy setup build to trigger Phase 4 (copies command files)
 if command -v generacy >/dev/null 2>&1; then

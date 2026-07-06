@@ -72,6 +72,22 @@ install_packages() {
         "@generacy-ai/control-plane@${CHANNEL}" \
         "@generacy-ai/orchestrator@${CHANNEL}" \
         2>>"$SETUP_LOG" || { log "ERROR: npm install failed"; exit 1; }
+
+    # Cockpit Claude Code plugin (generacy-ai/cluster-base#69). Installed as a
+    # separate, best-effort step so it can NOT brick cluster boot: the package
+    # may be absent from a given channel (e.g. before it is published to
+    # ${CHANNEL}), and a missing tag would fail the whole install above. It lands
+    # in the shared-packages volume where `generacy setup build` (G-S5) resolves
+    # it (Tier 2) and copies commands/*.md into ~/.claude/commands/cockpit/,
+    # making /cockpit:* available with no manual marketplace/npm steps.
+    log "Installing @generacy-ai/claude-plugin-cockpit@${CHANNEL} (best-effort) into ${SHARED_PACKAGES}..."
+    npm install \
+        --prefix "${SHARED_PACKAGES}" \
+        --no-save \
+        "@generacy-ai/claude-plugin-cockpit@${CHANNEL}" \
+        2>>"$SETUP_LOG" \
+        || log "WARNING: cockpit plugin install failed (channel: ${CHANNEL}) — /cockpit:* may be unavailable (see $SETUP_LOG)"
+
     # Write marker: channel + installed version of generacy
     local version
     version=$(node -e "console.log(require('${SHARED_PACKAGES}/node_modules/@generacy-ai/generacy/package.json').version)" 2>/dev/null || echo "unknown")
