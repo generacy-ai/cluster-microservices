@@ -61,6 +61,35 @@ CHANNEL="${GENERACY_CHANNEL:-stable}"
 MARKER_FILE="${SHARED_PACKAGES}/.installed-version"
 
 install_packages() {
+    # Seed a manifest in the shared volume declaring the core packages as
+    # dependencies. /shared-packages has no package.json of its own, so without
+    # this every already-installed package is *extraneous* to npm. The separate
+    # best-effort cockpit install below then reconciles the tree on its own
+    # terms and prunes everything it doesn't depend on — including the core
+    # packages' bin symlinks (notably .bin/generacy). That leaves the final
+    # `exec generacy orchestrator` failing with "generacy: not found" and the
+    # orchestrator in a crash loop, but only on channels where the cockpit
+    # package actually publishes (e.g. preview) so the second install succeeds
+    # and reconciles. Declaring the core packages here keeps them in npm's ideal
+    # tree so the cockpit install can no longer prune them
+    # (generacy-ai/cluster-base#71). Keep this list in sync with the install
+    # command below.
+    log "Seeding ${SHARED_PACKAGES}/package.json to protect core packages from prune..."
+    cat > "${SHARED_PACKAGES}/package.json" <<'EOF'
+{
+  "name": "generacy-shared-packages",
+  "private": true,
+  "dependencies": {
+    "@generacy-ai/generacy": "*",
+    "@generacy-ai/agency": "*",
+    "@generacy-ai/agency-plugin-spec-kit": "*",
+    "@generacy-ai/cluster-relay": "*",
+    "@generacy-ai/control-plane": "*",
+    "@generacy-ai/orchestrator": "*"
+  }
+}
+EOF
+
     log "Installing @generacy-ai packages (channel: ${CHANNEL}) into ${SHARED_PACKAGES}..."
     npm install \
         --prefix "${SHARED_PACKAGES}" \
