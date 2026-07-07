@@ -106,6 +106,22 @@ RUN mkdir -p /workspaces && chown -R node:node /workspaces
 # (Docker named volumes default to root, causing EACCES for node user)
 RUN mkdir -p /shared-packages && chown node:node /shared-packages
 
+# Put the user-facing CLIs on PATH for every shell type.
+# The entrypoint's npm install lands the CLI bins in the shared-packages volume
+# (/shared-packages/node_modules/.bin) and exports that dir onto PATH for the
+# entrypoint process ONLY — daemons it spawns inherit it, but interactive shells
+# and the VS Code tunnel session a developer actually attaches to do NOT. That
+# left `command -v generacy` failing (binary present, just not on PATH), which
+# breaks every /cockpit:* preflight and contradicts the zero-step goal
+# (generacy-ai/cluster-base#73, #69). Symlinking into /usr/local/bin at build
+# time (as root — the entrypoint runs as node and cannot write here) works
+# regardless of profile loading, unlike a ~/.bashrc/profile.d export — the same
+# reason code-server, code, and the gh wrapper live here. The links dangle only
+# during the brief boot window before the entrypoint populates the volume; once
+# the install runs they resolve through the mounted volume for all shells.
+RUN ln -sf /shared-packages/node_modules/.bin/generacy /usr/local/bin/generacy \
+ && ln -sf /shared-packages/node_modules/.bin/agency /usr/local/bin/agency
+
 # Credentials architecture: workflow subprocess isolation (v1.5)
 # See tetrad-development docs/credentials-architecture-plan.md decision #4.
 # These uids exist specifically to enforce uid-boundary isolation between the
