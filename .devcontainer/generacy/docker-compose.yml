@@ -87,6 +87,11 @@ services:
       - ENABLE_DIND=true
       # Use host docker context by default (orchestrator manages worker containers)
       - DOCKER_CONTEXT=host
+      # Cluster role (generacy-ai/cluster-base#75, mirrors the generacy scaffolder
+      # compose — generacy#917 Q2-A). Gates role-aware behavior like the
+      # `generacy cockpit mcp` worker-refusal backstop. Must stay in parity with
+      # the scaffolder-generated compose (they have silently diverged before).
+      - GENERACY_CLUSTER_ROLE=orchestrator
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:${ORCHESTRATOR_PORT:-3100}/health"]
       interval: 30s
@@ -169,6 +174,11 @@ services:
       - SKIP_PACKAGE_UPDATE=${SKIP_PACKAGE_UPDATE:-false}
       # Enable Docker-in-Docker for standalone mode (entrypoint starts dockerd)
       - ENABLE_DIND=true
+      # Cluster role (generacy-ai/cluster-base#75, mirrors the generacy scaffolder
+      # compose — generacy#917 Q2-A). Drives the defense-in-depth refusal in
+      # `generacy cockpit mcp` if it is ever invoked on a worker; the primary
+      # control is that entrypoint-worker.sh registers no MCP server at all.
+      - GENERACY_CLUSTER_ROLE=worker
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9001/health"]
       interval: 30s
