@@ -61,6 +61,35 @@ CHANNEL="${GENERACY_CHANNEL:-stable}"
 MARKER_FILE="${SHARED_PACKAGES}/.installed-version"
 
 install_packages() {
+    # Seed a manifest in the shared volume declaring the core packages as
+    # dependencies. /shared-packages has no package.json of its own, so without
+    # this every already-installed package is *extraneous* to npm. The separate
+    # best-effort cockpit install below then reconciles the tree on its own
+    # terms and prunes everything it doesn't depend on — including the core
+    # packages' bin symlinks (notably .bin/generacy). That leaves the final
+    # `exec generacy orchestrator` failing with "generacy: not found" and the
+    # orchestrator in a crash loop, but only on channels where the cockpit
+    # package actually publishes (e.g. preview) so the second install succeeds
+    # and reconciles. Declaring the core packages here keeps them in npm's ideal
+    # tree so the cockpit install can no longer prune them
+    # (generacy-ai/cluster-base#71). Keep this list in sync with the install
+    # command below.
+    log "Seeding ${SHARED_PACKAGES}/package.json to protect core packages from prune..."
+    cat > "${SHARED_PACKAGES}/package.json" <<'EOF'
+{
+  "name": "generacy-shared-packages",
+  "private": true,
+  "dependencies": {
+    "@generacy-ai/generacy": "*",
+    "@generacy-ai/agency": "*",
+    "@generacy-ai/agency-plugin-spec-kit": "*",
+    "@generacy-ai/cluster-relay": "*",
+    "@generacy-ai/control-plane": "*",
+    "@generacy-ai/orchestrator": "*"
+  }
+}
+EOF
+
     log "Installing @generacy-ai packages (channel: ${CHANNEL}) into ${SHARED_PACKAGES}..."
     npm install \
         --prefix "${SHARED_PACKAGES}" \
@@ -72,6 +101,22 @@ install_packages() {
         "@generacy-ai/control-plane@${CHANNEL}" \
         "@generacy-ai/orchestrator@${CHANNEL}" \
         2>>"$SETUP_LOG" || { log "ERROR: npm install failed"; exit 1; }
+
+    # Cockpit Claude Code plugin (generacy-ai/cluster-base#69). Installed as a
+    # separate, best-effort step so it can NOT brick cluster boot: the package
+    # may be absent from a given channel (e.g. before it is published to
+    # ${CHANNEL}), and a missing tag would fail the whole install above. It lands
+    # in the shared-packages volume where `generacy setup build` (G-S5) resolves
+    # it (Tier 2) and copies commands/*.md into ~/.claude/commands/cockpit/,
+    # making /cockpit:* available with no manual marketplace/npm steps.
+    log "Installing @generacy-ai/claude-plugin-cockpit@${CHANNEL} (best-effort) into ${SHARED_PACKAGES}..."
+    npm install \
+        --prefix "${SHARED_PACKAGES}" \
+        --no-save \
+        "@generacy-ai/claude-plugin-cockpit@${CHANNEL}" \
+        2>>"$SETUP_LOG" \
+        || log "WARNING: cockpit plugin install failed (channel: ${CHANNEL}) — /cockpit:* may be unavailable (see $SETUP_LOG)"
+
     # Write marker: channel + installed version of generacy
     local version
     version=$(node -e "console.log(require('${SHARED_PACKAGES}/node_modules/@generacy-ai/generacy/package.json').version)" 2>/dev/null || echo "unknown")
@@ -88,6 +133,97 @@ fi
 
 # Add shared packages to PATH for this process
 export PATH="${SHARED_PACKAGES}/node_modules/.bin:${PATH}"
+
+# Register the cockpit MCP server for the orchestrator's Claude sessions at
+# **user scope** (generacy-ai/cluster-base#75 — companion to generacy#917
+# FR-010, whose MCP server shipped but is unreachable until something registers
+# it). Contract source of truth:
+# specs/917-improvement-spec-from-cockpit/contracts/entrypoint-registration.md.
+#
+# Runs HERE — after the shared-packages install + PATH export above — so the
+# `generacy` binary the entry launches exists (it's symlinked into
+# /usr/local/bin for every shell type, see #73, and resolves through the volume
+# this install just populated). Writes ~/.claude.json's mcpServers.cockpit key
+# directly (the documented user-scope location — equivalent to
+# `claude mcp add --scope user cockpit -- generacy cockpit mcp`), which is
+# deterministic and doesn't depend on the `claude` CLI's add/overwrite exit
+# semantics.
+#
+# The WORKER entrypoint deliberately does NOT do this: not registering on
+# workers is the primary isolation control; the GENERACY_CLUSTER_ROLE=worker
+# refusal baked into `generacy cockpit mcp` is only defense-in-depth.
+#
+# Idempotent per the contract (#917 Q4-A — the entrypoint is the source of
+# truth; upgrades must self-heal, and hand-edits in a rebuildable container
+# aren't durable): a matching entry is a silent no-op; a stale/foreign entry is
+# overwritten unconditionally, each with one log line to stderr. Best-effort —
+# a failure warns but never bricks boot.
+node <<'NODE' || log "WARNING: cockpit MCP registration failed (see above) — /cockpit MCP tools may be unavailable in orchestrator sessions"
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const configPath = path.join(os.homedir(), '.claude.json');
+const DESIRED = { type: 'stdio', command: 'generacy', args: ['cockpit', 'mcp'] };
+
+let raw;
+try {
+  raw = fs.readFileSync(configPath, 'utf8');
+} catch (e) {
+  if (e.code === 'ENOENT') {
+    raw = '{}';
+  } else {
+    console.error('[entrypoint] ERROR reading ' + configPath + ': ' + e.message);
+    process.exit(1);
+  }
+}
+
+let config;
+try {
+  config = raw.trim() ? JSON.parse(raw) : {};
+} catch (e) {
+  // Never clobber an unparseable config we might be racing with — bail loudly.
+  console.error('[entrypoint] ERROR: ' + configPath + ' is not valid JSON; leaving it untouched (' + e.message + ')');
+  process.exit(1);
+}
+
+if (!config.mcpServers || typeof config.mcpServers !== 'object') {
+  config.mcpServers = {};
+}
+
+const existing = config.mcpServers.cockpit;
+// Compare only command + args per the contract (ignore extra fields like an
+// existing `type`), so a CLI-written-but-equivalent entry is left untouched.
+const argsMatch = existing
+  && Array.isArray(existing.args)
+  && existing.args.length === DESIRED.args.length
+  && existing.args.every((a, i) => a === DESIRED.args[i]);
+const isCurrent = existing && existing.command === DESIRED.command && argsMatch;
+
+if (isCurrent) {
+  process.exit(0); // Already correct — no-op, do not log.
+}
+
+const hadEntry = !!existing;
+let priorDesc = '';
+if (hadEntry) {
+  const parts = [];
+  if (typeof existing.command === 'string') parts.push(existing.command);
+  if (Array.isArray(existing.args)) parts.push(...existing.args.map(String));
+  priorDesc = parts.join(' ') || JSON.stringify(existing);
+}
+
+config.mcpServers.cockpit = DESIRED;
+// In-place write (O_TRUNC): ~/.claude.json is bind-mounted, so a rename-over
+// would break the mount. writeFileSync overwrites the same inode.
+fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+
+if (hadEntry) {
+  console.error('[entrypoint] reconciled cockpit MCP entry: prior command "' + priorDesc + '", now "generacy cockpit mcp"');
+} else {
+  console.error('[entrypoint] registered cockpit MCP server (user scope)');
+}
+NODE
 
 # Run generacy setup if CLI is available.
 # In wizard mode the workspace isn't cloned yet (credentials arrive post-activation),
