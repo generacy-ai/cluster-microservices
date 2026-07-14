@@ -158,19 +158,48 @@ export PATH="${SHARED_PACKAGES}/node_modules/.bin:${PATH}"
 # aren't durable): a matching entry is a silent no-op; a stale/foreign entry is
 # overwritten unconditionally, each with one log line to stderr. Best-effort —
 # a failure warns but never bricks boot.
-node <<'NODE' || log "WARNING: cockpit MCP registration failed (see above) — /cockpit MCP tools may be unavailable in orchestrator sessions"
+#
+# Gated on the cockpit capability actually being installed
+# (generacy-ai/cluster-base#78). On channels/points-in-time where the cockpit
+# subcommand isn't published yet (e.g. stable before 2026-07-13), `generacy
+# cockpit mcp` doesn't exist, so registering it unconditionally leaves a dead
+# MCP server that errors "unknown command 'cockpit'" on EVERY Claude session
+# start. Probe `generacy help cockpit` (commander's built-in help lookup: exit
+# 0 iff the `cockpit` command is registered) rather than the issue's suggested
+# `generacy cockpit --help` — the latter's `--help` short-circuits commander's
+# unknown-command error and exits 0 even when cockpit is absent, so it can't
+# distinguish present from absent. When the capability is ABSENT we don't
+# register, and we also REMOVE any stale cockpit entry so a downgrade/rollback
+# self-heals too. On a channel where cockpit IS installed, behavior is
+# unchanged (entry registered/reconciled).
+if generacy help cockpit >/dev/null 2>&1; then
+    COCKPIT_CAPABLE=1
+    log "cockpit capability present — reconciling cockpit MCP registration"
+else
+    COCKPIT_CAPABLE=0
+    log "cockpit capability absent on channel ${CHANNEL} — ensuring no stale cockpit MCP entry remains"
+fi
+
+COCKPIT_CAPABLE="$COCKPIT_CAPABLE" node <<'NODE' || log "WARNING: cockpit MCP registration failed (see above) — /cockpit MCP tools may be unavailable in orchestrator sessions"
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
 const configPath = path.join(os.homedir(), '.claude.json');
 const DESIRED = { type: 'stdio', command: 'generacy', args: ['cockpit', 'mcp'] };
+// Only register when the cockpit CLI is actually installed on this channel
+// (generacy-ai/cluster-base#78). When absent, remove any stale entry rather
+// than write/leave a dead one.
+const capable = process.env.COCKPIT_CAPABLE === '1';
 
 let raw;
 try {
   raw = fs.readFileSync(configPath, 'utf8');
 } catch (e) {
   if (e.code === 'ENOENT') {
+    // No config file yet. If cockpit isn't installed there's nothing to
+    // register and nothing to remove — a clean no-op.
+    if (!capable) process.exit(0);
     raw = '{}';
   } else {
     console.error('[entrypoint] ERROR reading ' + configPath + ': ' + e.message);
@@ -192,6 +221,21 @@ if (!config.mcpServers || typeof config.mcpServers !== 'object') {
 }
 
 const existing = config.mcpServers.cockpit;
+
+// Capability absent: `generacy cockpit mcp` can't start on this channel, so a
+// registered entry would be dead and error on every session. Remove any stale
+// entry (self-heals a downgrade/rollback) and never write a new one.
+if (!capable) {
+  if (!existing) process.exit(0); // Nothing registered — clean no-op.
+  delete config.mcpServers.cockpit;
+  // In-place write (O_TRUNC): ~/.claude.json is bind-mounted, so a rename-over
+  // would break the mount. writeFileSync overwrites the same inode.
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
+  console.error('[entrypoint] removed stale cockpit MCP entry (cockpit CLI not installed on this channel)');
+  process.exit(0);
+}
+
+// Capability present: reconcile toward DESIRED (existing self-heal semantics).
 // Compare only command + args per the contract (ignore extra fields like an
 // existing `type`), so a CLI-written-but-equivalent entry is left untouched.
 const argsMatch = existing
