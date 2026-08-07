@@ -127,6 +127,18 @@ npm install -g "@generacy-ai/agency-plugin-spec-kit@${CHANNEL}" 2>>"$SETUP_LOG" 
 }
 log "agency-plugin-spec-kit installed"
 
+# The remaining agency plugins supply source_control.*, run.*, build.*, test.*
+# and humancy.*. Best-effort: speckit recovery must still succeed without them
+# (spec-kit above is the one this script exists to restore), but recovering
+# only spec-kit would leave the cluster on 11 tools instead of 49 and agents
+# shelling out to bash for git, docker, builds and tests.
+for plugin in agency-plugin-git agency-plugin-docker agency-plugin-npm \
+              agency-plugin-firebase agency-plugin-humancy; do
+    npm install -g "@generacy-ai/${plugin}@${CHANNEL}" 2>>"$SETUP_LOG" \
+        && log "${plugin} installed" \
+        || log "WARNING: npm install -g @generacy-ai/${plugin}@${CHANNEL} failed — its tools will be unavailable (see $SETUP_LOG)"
+done
+
 # Cockpit Claude Code plugin (generacy-ai/cluster-base#69). Best-effort: unlike
 # speckit this is an orchestrator-only convenience and NOT required for workers
 # to process phases, so a failure here (e.g. the package not yet published to
