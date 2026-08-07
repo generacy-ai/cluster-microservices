@@ -16,6 +16,38 @@ bash /usr/local/bin/seed-claude-config.sh || true
 # Start Docker-in-Docker daemon and configure host context
 bash /usr/local/bin/setup-docker-dind.sh
 
+# Fix mounted host docker socket permissions.
+#
+# This container's DEFAULT docker context is the in-container DinD daemon, but
+# the sibling orchestrator/worker containers are owned by the HOST daemon —
+# so the worker-scale lifecycle action and entrypoint-post-activation.sh both
+# target /var/run/docker-host.sock explicitly via DOCKER_HOST. That socket
+# arrives with the host's docker group GID, which does not match the arbitrary
+# GID assigned by the in-container `groupadd` and is not predictable across
+# hosts (Debian, Docker Desktop and WSL2 all differ). Without this, the node
+# user gets EACCES on the socket and worker-scale fails.
+#
+# cluster-base has carried this since its #45/#47; it was dropped here during
+# an earlier cluster-base sync whose conflict resolution replaced this region
+# wholesale with the DinD call, and the host-socket dependency was not
+# reconsidered. Restored as a downstream adaptation: DinD stays, this runs
+# alongside it. Some hosts expose the socket world-writable, which is why the
+# gap went unnoticed.
+#
+# Idempotent and best-effort: if the socket is not mounted, or the chmod
+# fails, the orchestrator still starts and worker-scale surfaces a clearer
+# error later.
+HOST_DOCKER_SOCK="${HOST_DOCKER_SOCK:-/var/run/docker-host.sock}"
+if [ -S "$HOST_DOCKER_SOCK" ]; then
+    if sudo /usr/bin/chmod 666 "$HOST_DOCKER_SOCK" 2>/dev/null; then
+        log "Fixed host docker socket permissions ($HOST_DOCKER_SOCK)"
+    else
+        log "WARNING: could not chmod $HOST_DOCKER_SOCK — worker-scale may fail with EACCES"
+    fi
+else
+    log "WARNING: host docker socket not mounted at $HOST_DOCKER_SOCK — worker-scale will not work"
+fi
+
 # Source wizard-delivered credentials persisted by a prior bootstrap
 # (written by control-plane's bootstrap-complete handler — see
 # generacy-ai/generacy#589). On restarts of an already-bootstrapped
