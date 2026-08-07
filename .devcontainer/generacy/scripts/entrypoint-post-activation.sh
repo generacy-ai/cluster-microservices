@@ -66,6 +66,10 @@ log() {
 
 log "Starting post-activation setup..."
 
+# Wizard-mode clusters reach `generacy setup build` through this path rather
+# than the orchestrator entrypoint, so seed here too. No-ops if already seeded.
+bash /usr/local/bin/seed-claude-config.sh || true
+
 # Source wizard-delivered credentials (written by control-plane's
 # bootstrap-complete handler — see generacy-ai/generacy#589).
 # set -a auto-exports each assigned variable so child processes inherit them.
