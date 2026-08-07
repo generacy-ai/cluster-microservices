@@ -8,6 +8,11 @@ log() {
 
 log "Starting orchestrator setup..."
 
+# Give this container its own ~/.claude.json before anything writes to it.
+# Must run before `generacy setup auth` / `setup build`, which populate
+# mcpServers — see seed-claude-config.sh for why the file is no longer shared.
+bash /usr/local/bin/seed-claude-config.sh || true
+
 # Start Docker-in-Docker daemon and configure host context
 bash /usr/local/bin/setup-docker-dind.sh
 

@@ -16,6 +16,56 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] [setup-speckit] $*"
 }
 
+# Start the configured Agency MCP server and count the spec_kit tools it
+# advertises.
+#
+# Checking config strings is not enough: the server can start, report a healthy
+# connection to `claude mcp list`, and still advertise ZERO tools — which is
+# exactly what happened when an over-strict manifest semver check rejected every
+# preview-channel plugin. Speckit commands then silently degraded to raw bash
+# with nothing in any log. Only a real tools/list handshake catches that.
+#
+# Echoes the spec_kit tool count on stdout; non-zero exit means the server could
+# not be resolved or spoken to.
+count_spec_kit_tools() {
+    local cli
+    cli=$(node -e '
+      const fs = require("fs"), os = require("os"), path = require("path");
+      try {
+        const cfg = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".claude.json"), "utf-8"));
+        const args = cfg?.mcpServers?.agency?.args;
+        if (Array.isArray(args) && args[0]) process.stdout.write(args[0]);
+      } catch {}
+    ' 2>/dev/null)
+
+    if [ -z "$cli" ] || [ ! -f "$cli" ]; then
+        return 1
+    fi
+
+    printf '%s\n' \
+        '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"verify","version":"1"}}}' \
+        '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
+        '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+        | timeout 60 node "$cli" 2>/dev/null \
+        | node -e '
+            let buf = "";
+            process.stdin.on("data", (d) => (buf += d));
+            process.stdin.on("end", () => {
+              let count = 0;
+              for (const line of buf.split("\n")) {
+                if (!line.trim()) continue;
+                try {
+                  const msg = JSON.parse(line);
+                  if (msg.id === 2 && Array.isArray(msg.result?.tools)) {
+                    count = msg.result.tools.filter((t) => String(t.name).startsWith("spec_kit.")).length;
+                  }
+                } catch {}
+              }
+              process.stdout.write(String(count));
+            });
+        ' 2>/dev/null
+}
+
 verify_speckit() {
     local ok=true
 
@@ -32,6 +82,27 @@ verify_speckit() {
     elif ! grep -q "agency" "$HOME/.claude.json" 2>/dev/null; then
         log "VERIFY FAIL: agency MCP server not found in ~/.claude.json"
         ok=false
+    fi
+
+    # The check that actually matters: does the server serve spec_kit tools?
+    #
+    # Reported loudly but NOT fatal. The existing FATAL conditions above are
+    # missing files — deterministic and unrecoverable. This one is a live
+    # handshake that can fail for transient reasons (slow start, timeout), and
+    # turning that into a boot failure would be a new way to brick a cluster.
+    # A degraded worker that logs why beats a worker that will not start.
+    local tool_count
+    tool_count=$(count_spec_kit_tools)
+    if [ -z "$tool_count" ]; then
+        log "WARNING: could not resolve or start the agency MCP server from ~/.claude.json"
+        log "WARNING: speckit commands will fall back to bash — check $SETUP_LOG"
+    elif [ "$tool_count" -eq 0 ] 2>/dev/null; then
+        log "WARNING: agency MCP server started but advertises 0 spec_kit tools"
+        log "WARNING: a healthy MCP connection with no tools means speckit commands"
+        log "WARNING: silently fall back to bash. Check plugin discovery: the server"
+        log "WARNING: logs '[agency] Ignoring plugin at ...' for rejected manifests."
+    else
+        log "Agency MCP server advertises ${tool_count} spec_kit tools"
     fi
 
     if [ "$ok" = true ]; then
