@@ -25,6 +25,11 @@ fi
 
 log "Starting worker setup..."
 
+# Give this container its own ~/.claude.json before anything writes to it.
+# Must run before `generacy setup auth` / `setup build`, which populate
+# mcpServers — see seed-claude-config.sh for why the file is no longer shared.
+bash /usr/local/bin/seed-claude-config.sh || true
+
 # Start Docker-in-Docker daemon (workers get DinD but not host context)
 bash /usr/local/bin/setup-docker-dind.sh
 
@@ -106,11 +111,34 @@ fi
 
 log "CLI wrappers created in ${LOCAL_BIN}"
 
+# Has this container's cluster finished bootstrapping?
+#
+# GENERACY_BOOTSTRAP_MODE is a static compose value: it stays "wizard" for the
+# whole life of the container, including across the post-activation worker
+# restart. Gating setup on the mode alone therefore skipped it FOREVER on
+# wizard (UI-launched) clusters — the restart re-runs this entrypoint with the
+# same value and takes the same "defer" branch, so `generacy setup build` never
+# ran and mcpServers.agency was never written. Workers then launched Claude with
+# no Agency MCP server and every phase silently fell back to raw bash.
+#
+# That went unnoticed while all containers shared one ~/.claude.json: the
+# orchestrator's post-activation `setup build` wrote the entry and workers
+# inherited it. Once each container got its own config, the inheritance stopped
+# and this latent gap became visible.
+#
+# The wizard credentials file is the real activation signal — it is written by
+# control-plane's bootstrap-complete handler and is precisely what the
+# post-activation restart makes available. Sourced above.
+SETUP_READY=true
+if [ "${GENERACY_BOOTSTRAP_MODE:-devcontainer}" = "wizard" ] && [ ! -f "$WIZARD_CREDS" ]; then
+    SETUP_READY=false
+fi
+
 # Run generacy setup if CLI is available.
-# In wizard mode the workspace isn't cloned yet (credentials arrive post-activation),
-# so workspace/build steps are deferred to entrypoint-post-activation.sh.
-if [ "${GENERACY_BOOTSTRAP_MODE:-devcontainer}" = "wizard" ]; then
-    log "Wizard mode — skipping pre-activation generacy setup; will run after activation"
+# Before activation the credentials (and workspace) are not there yet, so
+# workspace/build steps wait for the post-activation restart.
+if [ "$SETUP_READY" != "true" ]; then
+    log "Wizard mode, not yet activated — deferring generacy setup until after activation"
 elif command -v generacy >/dev/null 2>&1; then
     SETUP_LOG="/tmp/generacy-setup.log"
     log "Running generacy setup..."
@@ -135,12 +163,16 @@ elif command -v generacy >/dev/null 2>&1; then
 fi
 
 # Pre-flight: verify speckit readiness.
-# Skip in wizard mode — speckit lives in the not-yet-cloned workspace. The worker
-# idles in this state until post-activation completes setup and restarts the
-# worker containers (entrypoint-post-activation.sh step 5,
-# generacy-ai/cluster-base#59); that restart re-runs this entrypoint with creds +
-# repo present, so the verify below then runs against a populated workspace.
-if [ "${GENERACY_BOOTSTRAP_MODE:-devcontainer}" != "wizard" ] && [ -x "/usr/local/bin/setup-speckit.sh" ]; then
+# Skipped before activation — speckit lives in the not-yet-cloned workspace. The
+# worker idles in this state until post-activation completes setup and restarts
+# the worker containers (entrypoint-post-activation.sh step 5,
+# generacy-ai/cluster-base#59); that restart re-runs this entrypoint with creds
+# present, so SETUP_READY flips to true and the verify below runs for real.
+#
+# It previously keyed off GENERACY_BOOTSTRAP_MODE, which never changes, so this
+# check was permanently dead on wizard clusters — which is why workers ran four
+# issues' worth of phases with zero agency tools and nothing said a word.
+if [ "$SETUP_READY" = "true" ] && [ -x "/usr/local/bin/setup-speckit.sh" ]; then
     if ! bash /usr/local/bin/setup-speckit.sh --verify; then
         log "FATAL: Speckit commands not available. Worker cannot process phases."
         log "FATAL: Check ${SETUP_LOG:-/tmp/generacy-setup.log} for setup errors."

@@ -8,8 +8,45 @@ log() {
 
 log "Starting orchestrator setup..."
 
+# Give this container its own ~/.claude.json before anything writes to it.
+# Must run before `generacy setup auth` / `setup build`, which populate
+# mcpServers — see seed-claude-config.sh for why the file is no longer shared.
+bash /usr/local/bin/seed-claude-config.sh || true
+
 # Start Docker-in-Docker daemon and configure host context
 bash /usr/local/bin/setup-docker-dind.sh
+
+# Fix mounted host docker socket permissions.
+#
+# This container's DEFAULT docker context is the in-container DinD daemon, but
+# the sibling orchestrator/worker containers are owned by the HOST daemon —
+# so the worker-scale lifecycle action and entrypoint-post-activation.sh both
+# target /var/run/docker-host.sock explicitly via DOCKER_HOST. That socket
+# arrives with the host's docker group GID, which does not match the arbitrary
+# GID assigned by the in-container `groupadd` and is not predictable across
+# hosts (Debian, Docker Desktop and WSL2 all differ). Without this, the node
+# user gets EACCES on the socket and worker-scale fails.
+#
+# cluster-base has carried this since its #45/#47; it was dropped here during
+# an earlier cluster-base sync whose conflict resolution replaced this region
+# wholesale with the DinD call, and the host-socket dependency was not
+# reconsidered. Restored as a downstream adaptation: DinD stays, this runs
+# alongside it. Some hosts expose the socket world-writable, which is why the
+# gap went unnoticed.
+#
+# Idempotent and best-effort: if the socket is not mounted, or the chmod
+# fails, the orchestrator still starts and worker-scale surfaces a clearer
+# error later.
+HOST_DOCKER_SOCK="${HOST_DOCKER_SOCK:-/var/run/docker-host.sock}"
+if [ -S "$HOST_DOCKER_SOCK" ]; then
+    if sudo /usr/bin/chmod 666 "$HOST_DOCKER_SOCK" 2>/dev/null; then
+        log "Fixed host docker socket permissions ($HOST_DOCKER_SOCK)"
+    else
+        log "WARNING: could not chmod $HOST_DOCKER_SOCK — worker-scale may fail with EACCES"
+    fi
+else
+    log "WARNING: host docker socket not mounted at $HOST_DOCKER_SOCK — worker-scale will not work"
+fi
 
 # Source wizard-delivered credentials persisted by a prior bootstrap
 # (written by control-plane's bootstrap-complete handler — see
@@ -83,6 +120,11 @@ install_packages() {
     "@generacy-ai/generacy": "*",
     "@generacy-ai/agency": "*",
     "@generacy-ai/agency-plugin-spec-kit": "*",
+    "@generacy-ai/agency-plugin-git": "*",
+    "@generacy-ai/agency-plugin-docker": "*",
+    "@generacy-ai/agency-plugin-npm": "*",
+    "@generacy-ai/agency-plugin-firebase": "*",
+    "@generacy-ai/agency-plugin-humancy": "*",
     "@generacy-ai/cluster-relay": "*",
     "@generacy-ai/control-plane": "*",
     "@generacy-ai/orchestrator": "*"
@@ -90,6 +132,15 @@ install_packages() {
 }
 EOF
 
+    # The agency-plugin-* set is what gives agents tools. Installing only
+    # spec-kit left clusters with 11 tools where a source build has 49 — no
+    # source_control.*, run.*, build.*, test.* or humancy.* at all, so agents
+    # shelled out to raw bash for git, docker, builds and tests.
+    #
+    # Safe to keep in the critical install rather than best-effort (as cockpit
+    # is): the plugins are published from the agency monorepo in lockstep with
+    # @generacy-ai/agency itself, which is already critical here. If
+    # agency@${CHANNEL} resolves, its sibling plugins resolve too.
     log "Installing @generacy-ai packages (channel: ${CHANNEL}) into ${SHARED_PACKAGES}..."
     npm install \
         --prefix "${SHARED_PACKAGES}" \
@@ -97,6 +148,11 @@ EOF
         "@generacy-ai/generacy@${CHANNEL}" \
         "@generacy-ai/agency@${CHANNEL}" \
         "@generacy-ai/agency-plugin-spec-kit@${CHANNEL}" \
+        "@generacy-ai/agency-plugin-git@${CHANNEL}" \
+        "@generacy-ai/agency-plugin-docker@${CHANNEL}" \
+        "@generacy-ai/agency-plugin-npm@${CHANNEL}" \
+        "@generacy-ai/agency-plugin-firebase@${CHANNEL}" \
+        "@generacy-ai/agency-plugin-humancy@${CHANNEL}" \
         "@generacy-ai/cluster-relay@${CHANNEL}" \
         "@generacy-ai/control-plane@${CHANNEL}" \
         "@generacy-ai/orchestrator@${CHANNEL}" \
