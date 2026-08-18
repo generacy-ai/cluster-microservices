@@ -18,9 +18,14 @@
 # drifts. It mirrors the `gh` JIT wrapper's philosophy: don't trust the ambient
 # credential state; re-establish the JIT path on demand.
 #
-# Launched (backgrounded) only by the orchestrator entrypoint — VS Code attaches
-# to the orchestrator, not workers — but it is harmless anywhere: it no-ops when
-# there is no drift and self-exits outside wizard mode.
+# Launched (backgrounded) by the orchestrator AND worker entrypoints. VS Code
+# only attaches to the orchestrator, but workers proved to have their own
+# clobber source: the generacy setup steps (`setup auth` / `setup workspace`)
+# rewrote the same static wiring from the 1-hour wizard token, and with no
+# guard running workers lost git auth an hour after activation (fixed at the
+# source in generacy-ai/generacy#1105; the guard also protects against
+# in-workflow tooling). Harmless anywhere: it no-ops when there is no drift
+# and self-exits outside wizard mode.
 
 set -uo pipefail
 

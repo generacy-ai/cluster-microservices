@@ -155,6 +155,14 @@ if command -v generacy >/dev/null 2>&1; then
         log "ERROR: 'generacy setup build' failed — attempting speckit recovery (see $SETUP_LOG)"
         bash /usr/local/bin/setup-speckit.sh 2>>"$SETUP_LOG" || log "ERROR: speckit recovery also failed (see $SETUP_LOG)"
     }
+
+    # Re-assert git credential wiring: `setup auth` / `setup workspace` replace
+    # the JIT helper (Step 1) with static wiring built from the 1-hour wizard
+    # GH_TOKEN (`credential.helper store` + `gh auth setup-git`). The
+    # orchestrator's git-helper-guard would heal this within its poll interval,
+    # but healing eagerly closes the drift window entirely. Fixed at the source
+    # in generacy-ai/generacy#1105; kept here for older generacy versions.
+    bash /usr/local/bin/setup-credentials.sh
 else
     log "WARNING: generacy CLI not on PATH — skipping setup. Restart the orchestrator container to install."
 fi
