@@ -205,6 +205,14 @@ if [ "$SETUP_READY" = "true" ] && [ -x "/usr/local/bin/setup-speckit.sh" ]; then
     fi
 fi
 
+# Provision the gateway Claude config dir (generacy-ai/cluster-base#90).
+# End of bootstrap, after `generacy setup build` has written mcpServers.agency
+# into ~/.claude.json — the gateway dir gets a copy of that file, so an earlier
+# run would leave gateway-routed sessions with no MCP servers. No-ops unless
+# GENERACY_LLM_GATEWAY_URL is set. Pre-activation wizard workers provision
+# whatever config exists now and re-provision on the post-activation restart.
+bash /usr/local/bin/setup-claude-gateway-config.sh || true
+
 # Start worker as PID 1
 log "Starting worker ${AGENT_ID}..."
 exec generacy orchestrator \

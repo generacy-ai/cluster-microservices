@@ -167,6 +167,13 @@ else
     log "WARNING: generacy CLI not on PATH — skipping setup. Restart the orchestrator container to install."
 fi
 
+# Provision the gateway Claude config dir (generacy-ai/cluster-base#90).
+# This is the wizard-mode path to `generacy setup build`, which rewrites
+# mcpServers.agency in ~/.claude.json, so refresh the gateway dir's copy here
+# too — otherwise wizard clusters carry a pre-activation copy with no MCP
+# servers. No-ops unless GENERACY_LLM_GATEWAY_URL is set.
+bash /usr/local/bin/setup-claude-gateway-config.sh || true
+
 # Mark complete only now that the workspace is confirmed present. The
 # orchestrator's PostActivationRetryService treats this flag as "done" and stops
 # retrying — so it must never be written on a failed/no-op clone (the guards
