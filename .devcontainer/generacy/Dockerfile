@@ -97,6 +97,11 @@ FROM dind AS final
 # (scripts/gh, generacy-ai/cluster-base#66) at /usr/local/bin/gh, which precedes
 # /usr/bin/gh on PATH and so shadows the real gh — minting a fresh token per
 # invocation instead of riding the static, expiring GH_TOKEN.
+#
+# The whole scripts/ directory ships, so per-script COPY lines are unnecessary:
+# seed-claude-config.sh and setup-claude-gateway-config.sh
+# (generacy-ai/cluster-base#90) both land at /usr/local/bin/<name> executable,
+# which is where the entrypoints invoke them from.
 COPY --chmod=755 scripts/ /usr/local/bin/
 
 # Create workspaces directory with node ownership
