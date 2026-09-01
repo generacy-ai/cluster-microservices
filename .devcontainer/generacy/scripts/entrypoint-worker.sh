@@ -160,7 +160,31 @@ elif command -v generacy >/dev/null 2>&1; then
         log "ERROR: 'generacy setup build' failed — attempting speckit recovery (see $SETUP_LOG)"
         bash /usr/local/bin/setup-speckit.sh 2>>"$SETUP_LOG" || log "ERROR: speckit recovery also failed (see $SETUP_LOG)"
     }
+
+    # Re-assert git credential wiring after the generacy setup steps.
+    #
+    # `generacy setup auth` / `setup workspace` predate the JIT credential
+    # helper: given the wizard GH_TOKEN (the 1-hour activation token sourced
+    # above) they configure `credential.helper store` + ~/.git-credentials and
+    # run `gh auth setup-git`, both of which replace the JIT helper that
+    # setup-credentials.sh wired at the top of this entrypoint. Workers then
+    # sit on a static token that dies an hour after it was minted — every
+    # clone 401s and restarts fail immediately once wizard-credentials.env is
+    # older than an hour. generacy-ai/generacy#1105 makes the setup commands
+    # JIT-aware; this re-run keeps workers safe on generacy versions that
+    # predate it. Idempotent both ways: wizard mode tears down static wiring
+    # and re-installs the JIT helper, local-dev mode re-seeds the static
+    # token unchanged.
+    bash /usr/local/bin/setup-credentials.sh
 fi
+
+# Keep the JIT helper authoritative for the life of the container (wizard
+# mode only — the guard self-exits otherwise). The guard was originally
+# orchestrator-only on the assumption that VS Code, which attaches to the
+# orchestrator, is the only thing that clobbers git credential config; the
+# generacy setup steps above proved workers need it too, and it also covers
+# any in-workflow tooling that rewrites ~/.gitconfig mid-job.
+bash /usr/local/bin/git-helper-guard.sh &
 
 # Pre-flight: verify speckit readiness.
 # Skipped before activation — speckit lives in the not-yet-cloned workspace. The
@@ -180,6 +204,14 @@ if [ "$SETUP_READY" = "true" ] && [ -x "/usr/local/bin/setup-speckit.sh" ]; then
         exit 1
     fi
 fi
+
+# Provision the gateway Claude config dir (generacy-ai/cluster-base#90).
+# End of bootstrap, after `generacy setup build` has written mcpServers.agency
+# into ~/.claude.json — the gateway dir gets a copy of that file, so an earlier
+# run would leave gateway-routed sessions with no MCP servers. No-ops unless
+# GENERACY_LLM_GATEWAY_URL is set. Pre-activation wizard workers provision
+# whatever config exists now and re-provision on the post-activation restart.
+bash /usr/local/bin/setup-claude-gateway-config.sh || true
 
 # Start worker as PID 1
 log "Starting worker ${AGENT_ID}..."

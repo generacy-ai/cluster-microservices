@@ -361,6 +361,16 @@ if [ "${GENERACY_BOOTSTRAP_MODE:-devcontainer}" != "wizard" ] && [ -x "/usr/loca
     fi
 fi
 
+# Provision the gateway Claude config dir (generacy-ai/cluster-base#90).
+# Runs HERE, at the end of bootstrap, NOT next to seed-claude-config.sh: it
+# copies ~/.claude.json into /home/node/.claude-gateway, so it has to run after
+# everything that writes mcpServers — the cockpit registration above and
+# `generacy setup build`. Running it earlier gives gateway-routed sessions no
+# MCP servers, so speckit silently falls back to bash. No-ops unless
+# GENERACY_LLM_GATEWAY_URL is set; re-run after any later `setup build`
+# (wizard clusters get theirs from entrypoint-post-activation.sh).
+bash /usr/local/bin/setup-claude-gateway-config.sh || true
+
 # Wizard mode: arm the post-activation hook.
 # Spawns a background watcher that fires entrypoint-post-activation.sh when
 # the bootstrap-complete sentinel appears. The trigger contract is documented

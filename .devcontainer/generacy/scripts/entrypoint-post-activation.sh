@@ -155,9 +155,24 @@ if command -v generacy >/dev/null 2>&1; then
         log "ERROR: 'generacy setup build' failed — attempting speckit recovery (see $SETUP_LOG)"
         bash /usr/local/bin/setup-speckit.sh 2>>"$SETUP_LOG" || log "ERROR: speckit recovery also failed (see $SETUP_LOG)"
     }
+
+    # Re-assert git credential wiring: `setup auth` / `setup workspace` replace
+    # the JIT helper (Step 1) with static wiring built from the 1-hour wizard
+    # GH_TOKEN (`credential.helper store` + `gh auth setup-git`). The
+    # orchestrator's git-helper-guard would heal this within its poll interval,
+    # but healing eagerly closes the drift window entirely. Fixed at the source
+    # in generacy-ai/generacy#1105; kept here for older generacy versions.
+    bash /usr/local/bin/setup-credentials.sh
 else
     log "WARNING: generacy CLI not on PATH — skipping setup. Restart the orchestrator container to install."
 fi
+
+# Provision the gateway Claude config dir (generacy-ai/cluster-base#90).
+# This is the wizard-mode path to `generacy setup build`, which rewrites
+# mcpServers.agency in ~/.claude.json, so refresh the gateway dir's copy here
+# too — otherwise wizard clusters carry a pre-activation copy with no MCP
+# servers. No-ops unless GENERACY_LLM_GATEWAY_URL is set.
+bash /usr/local/bin/setup-claude-gateway-config.sh || true
 
 # Mark complete only now that the workspace is confirmed present. The
 # orchestrator's PostActivationRetryService treats this flag as "done" and stops
