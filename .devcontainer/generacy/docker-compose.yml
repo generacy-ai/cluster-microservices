@@ -92,6 +92,22 @@ services:
       # `generacy cockpit mcp` worker-refusal backstop. Must stay in parity with
       # the scaffolder-generated compose (they have silently diverged before).
       - GENERACY_CLUSTER_ROLE=orchestrator
+      # Claude Code keeps its OAuth credentials in ~/.config/anthropic — a
+      # store separate from ~/.claude — so the shared claude-config volume no
+      # longer carries the login on its own: every container came up
+      # unauthenticated and each phase exited "Not logged in" in <1s while the
+      # phase runner committed an empty phase. Relocating the store into the
+      # shared volume restores one login for the whole cluster; the
+      # orchestrator is where an operator's `/login` and token refreshes
+      # happen, so it must carry the same value as the workers.
+      #
+      # Gateway-routed launches are unaffected: they authenticate via
+      # ANTHROPIC_BASE_URL / ANTHROPIC_AUTH_TOKEN from the gateway config dir's
+      # settings.json (see setup-claude-gateway-config.sh), which take
+      # precedence over anything in this store.
+      #
+      # Must stay in parity with the generacy scaffolder compose.
+      - ANTHROPIC_CONFIG_DIR=/home/node/.claude/anthropic-config
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:${ORCHESTRATOR_PORT:-3100}/health"]
       interval: 30s
@@ -179,6 +195,10 @@ services:
       # `generacy cockpit mcp` if it is ever invoked on a worker; the primary
       # control is that entrypoint-worker.sh registers no MCP server at all.
       - GENERACY_CLUSTER_ROLE=worker
+      # Shared Claude login — see the orchestrator's environment block for why
+      # the ~/.config/anthropic store has to be relocated into claude-config.
+      # The two services must always carry the same value.
+      - ANTHROPIC_CONFIG_DIR=/home/node/.claude/anthropic-config
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9001/health"]
       interval: 30s
